@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"crypto/tls"
 	"html/template"
-	"net/url"
-	"strings"
 
 	"nousmail/internal/models"
 
@@ -36,15 +34,6 @@ func RenderBody(body string, data Personalization) (string, error) {
 		return "", err
 	}
 	return buf.String(), nil
-}
-
-func AddTrackingPixel(body, baseURL, trackingID string) string {
-	u := strings.TrimRight(baseURL, "/") + "/api/track/open.gif?tid=" + url.QueryEscape(trackingID)
-	pixel := `<img src="` + u + `" width="1" height="1" alt="" style="display:none;width:1px;height:1px;border:0" />`
-	if strings.Contains(strings.ToLower(body), "</body>") {
-		return strings.Replace(body, "</body>", pixel+"</body>", 1)
-	}
-	return body + pixel
 }
 
 func Send(mailbox models.Mailbox, toEmail, toName, subject, html string) error {

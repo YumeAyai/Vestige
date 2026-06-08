@@ -22,6 +22,7 @@ export const api = {
   },
   templates: () => request('/api/templates'),
   createTemplate: (data) => request('/api/templates', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
+  previewTemplate: (data) => request('/api/templates/preview', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
   campaigns: () => request('/api/campaigns'),
   createCampaign: (data) => request('/api/campaigns', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
   campaign: (id) => request(`/api/campaigns/${id}`),

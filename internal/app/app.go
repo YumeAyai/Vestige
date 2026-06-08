@@ -1,31 +1,35 @@
 package app
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/csv"
 	"errors"
 	"io/fs"
 	"mime"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"nousmail/internal/mailer"
 	"nousmail/internal/models"
-	"nousmail/internal/tracking"
+	"nousmail/internal/tracker"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/xuri/excelize/v2"
 )
 
 type Server struct {
 	db       *sql.DB
 	frontend fs.FS
+	tracker  tracker.SQLiteRecorder
 }
 
 func New(db *sql.DB, frontend fs.FS) *gin.Engine {
-	s := &Server{db: db, frontend: frontend}
+	s := &Server{db: db, frontend: frontend, tracker: tracker.NewSQLiteRecorder(db)}
 	r := gin.Default()
 
 	api := r.Group("/api")
@@ -39,6 +43,7 @@ func New(db *sql.DB, frontend fs.FS) *gin.Engine {
 	api.POST("/contacts/import", s.importContacts)
 	api.GET("/templates", s.listTemplates)
 	api.POST("/templates", s.createTemplate)
+	api.POST("/templates/preview", s.previewTemplate)
 	api.GET("/campaigns", s.listCampaigns)
 	api.POST("/campaigns", s.createCampaign)
 	api.GET("/campaigns/:id", s.getCampaign)
@@ -177,28 +182,53 @@ func (s *Server) importContacts(c *gin.Context) {
 	}
 	defer f.Close()
 
-	reader := csv.NewReader(f)
-	reader.FieldsPerRecord = -1
-	records, err := reader.ReadAll()
+	buf := bytes.Buffer{}
+	if _, err := buf.ReadFrom(f); err != nil {
+		fail(c, err)
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	var contacts []models.Contact
+	switch ext {
+	case ".xlsx":
+		contacts, err = readContactsXLSX(buf.Bytes())
+	case ".csv":
+		contacts, err = readContactsCSV(buf.Bytes())
+	default:
+		err = errors.New("仅支持 .xlsx 或 .csv 联系人文件")
+	}
 	if err != nil {
 		fail(c, err)
 		return
 	}
-	imported := 0
-	for i, record := range records {
-		if len(record) < 2 {
+
+	imported, skipped := 0, 0
+	for _, contact := range contacts {
+		if contact.Email == "" {
+			skipped++
 			continue
 		}
-		if i == 0 && strings.Contains(strings.ToLower(strings.Join(record, ",")), "email") {
-			continue
+		if contact.Name == "" {
+			contact.Name = contact.Company
 		}
-		_, err := s.db.Exec(`INSERT OR IGNORE INTO contacts(name,email,company,department,phone,tags,notes) VALUES(?,?,?,?,?,?,?)`,
-			cell(record, 0), cell(record, 1), cell(record, 2), cell(record, 3), cell(record, 4), cell(record, 5), cell(record, 6))
-		if err == nil {
+		if contact.Name == "" {
+			contact.Name = contact.Email
+		}
+		res, err := s.db.Exec(`INSERT OR IGNORE INTO contacts(name,email,company,department,phone,tags,notes) VALUES(?,?,?,?,?,?,?)`,
+			contact.Name, contact.Email, contact.Company, contact.Department, contact.Phone, contact.Tags, contact.Notes)
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		affected, _ := res.RowsAffected()
+		if affected > 0 {
 			imported++
+		} else {
+			skipped++
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"imported": imported})
+	c.JSON(http.StatusOK, gin.H{"imported": imported, "skipped": skipped})
 }
 
 func (s *Server) listTemplates(c *gin.Context) {
@@ -232,6 +262,42 @@ func (s *Server) createTemplate(c *gin.Context) {
 	}
 	input.ID, _ = res.LastInsertId()
 	c.JSON(http.StatusCreated, input)
+}
+
+type previewTemplateInput struct {
+	Subject  string         `json:"subject"`
+	BodyHTML string         `json:"body_html"`
+	Contact  models.Contact `json:"contact"`
+}
+
+func (s *Server) previewTemplate(c *gin.Context) {
+	var input previewTemplateInput
+	if bind(c, &input) != nil {
+		return
+	}
+	if input.Contact.Name == "" {
+		input.Contact.Name = "上海示例企业有限公司"
+	}
+	if input.Contact.Company == "" {
+		input.Contact.Company = input.Contact.Name
+	}
+	if input.Contact.Email == "" {
+		input.Contact.Email = "contact@example.com"
+	}
+	if input.Contact.Phone == "" {
+		input.Contact.Phone = "021-00000000"
+	}
+	body, err := mailer.RenderBody(input.BodyHTML, mailer.Personalization{Contact: input.Contact})
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	subject, err := mailer.RenderBody(input.Subject, mailer.Personalization{Contact: input.Contact})
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"subject": subject, "body_html": body})
 }
 
 type createCampaignInput struct {
@@ -326,10 +392,7 @@ func (s *Server) sendCampaign(c *gin.Context) {
 		fail(c, err)
 		return
 	}
-	baseURL := c.GetHeader("X-Base-URL")
-	if baseURL == "" {
-		baseURL = "http://" + c.Request.Host
-	}
+	baseURL := trackingBaseURL(c)
 	rows, err := s.db.Query(`SELECT cr.id,cr.contact_id,cr.email,cr.name,cr.tracking_id,c.company,c.department,c.phone,c.tags,c.notes FROM campaign_recipients cr JOIN contacts c ON c.id=cr.contact_id WHERE cr.campaign_id=? AND cr.send_status IN ('pending','failed')`, id)
 	if err != nil {
 		fail(c, err)
@@ -345,12 +408,19 @@ func (s *Server) sendCampaign(c *gin.Context) {
 			return
 		}
 		contact.ID, contact.Name, contact.Email = rec.ContactID, rec.Name, rec.Email
-		body, err := mailer.RenderBody(campaign.BodyHTML, mailer.Personalization{BaseURL: baseURL, Contact: contact, Recipient: rec, Campaign: campaign})
+		data := mailer.Personalization{BaseURL: baseURL, Contact: contact, Recipient: rec, Campaign: campaign}
+		subject, err := mailer.RenderBody(campaign.Subject, data)
+		if err != nil {
+			_, _ = s.db.Exec(`UPDATE campaign_recipients SET send_status='failed',failure_reason=? WHERE id=?`, err.Error(), rec.ID)
+			failed++
+			continue
+		}
+		body, err := mailer.RenderBody(campaign.BodyHTML, data)
 		if err == nil && campaign.TrackingEnabled {
-			body = mailer.AddTrackingPixel(body, baseURL, rec.TrackingID)
+			body = tracker.InjectPixel(body, baseURL, rec.TrackingID)
 		}
 		if err == nil {
-			err = mailer.Send(mb, rec.Email, rec.Name, campaign.Subject, body)
+			err = mailer.Send(mb, rec.Email, rec.Name, subject, body)
 		}
 		if err != nil {
 			failed++
@@ -417,18 +487,15 @@ func (s *Server) listRecipients(c *gin.Context) {
 func (s *Server) trackOpen(c *gin.Context) {
 	tid := c.Query("tid")
 	if tid != "" {
-		var id int64
-		err := s.db.QueryRow(`SELECT id FROM campaign_recipients WHERE tracking_id=?`, tid).Scan(&id)
-		if err == nil {
-			ua := c.GetHeader("User-Agent")
-			prefetch := looksLikePrefetch(ua)
-			_, _ = s.db.Exec(`INSERT INTO open_events(campaign_recipient_id,tracking_id,ip,user_agent,is_prefetch) VALUES(?,?,?,?,?)`, id, tid, c.ClientIP(), ua, prefetch)
-			_, _ = s.db.Exec(`UPDATE campaign_recipients SET open_count=open_count+1, first_opened_at=COALESCE(first_opened_at,CURRENT_TIMESTAMP), last_opened_at=CURRENT_TIMESTAMP WHERE id=?`, id)
-		}
+		_ = s.tracker.RecordOpen(tracker.Event{
+			TrackingID: tid,
+			IP:         c.ClientIP(),
+			UserAgent:  c.GetHeader("User-Agent"),
+		})
 	}
 	c.Header("Content-Type", "image/gif")
 	c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-	c.Data(http.StatusOK, "image/gif", tracking.PixelGIF)
+	c.Data(http.StatusOK, "image/gif", tracker.PixelGIF)
 }
 
 func (s *Server) exportCampaignCSV(c *gin.Context) {
@@ -477,15 +544,122 @@ func cell(record []string, index int) string {
 	return strings.TrimSpace(record[index])
 }
 
+func readContactsCSV(data []byte) ([]models.Contact, error) {
+	reader := csv.NewReader(bytes.NewReader(data))
+	reader.FieldsPerRecord = -1
+	records, err := reader.ReadAll()
+	if err != nil {
+		return nil, err
+	}
+	if len(records) == 0 {
+		return nil, nil
+	}
+	header := headerMap(records[0])
+	start := 1
+	if !hasKnownHeader(header) {
+		start = 0
+	}
+	contacts := []models.Contact{}
+	for _, record := range records[start:] {
+		contacts = append(contacts, contactFromRow(func(name string, fallback int) string {
+			if index, ok := header[name]; ok {
+				return cell(record, index)
+			}
+			return cell(record, fallback)
+		}))
+	}
+	return contacts, nil
+}
+
+func readContactsXLSX(data []byte) ([]models.Contact, error) {
+	book, err := excelize.OpenReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer book.Close()
+	sheet := book.GetSheetName(0)
+	rows, err := book.GetRows(sheet)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	header := headerMap(rows[0])
+	contacts := []models.Contact{}
+	for _, row := range rows[1:] {
+		contacts = append(contacts, contactFromRow(func(name string, fallback int) string {
+			if index, ok := header[name]; ok {
+				return cell(row, index)
+			}
+			return cell(row, fallback)
+		}))
+	}
+	return contacts, nil
+}
+
+func contactFromRow(value func(name string, fallback int) string) models.Contact {
+	company := firstNonEmpty(value("公司名", 0), value("公司", 0), value("企业名称", 0))
+	email := firstNonEmpty(value("邮箱", 4), value("email", 1), value("Email", 1))
+	phone := firstNonEmpty(value("联系电话", 3), value("手机号", 4), value("电话", 4))
+	industry := value("行业", 8)
+	size := value("规模", 9)
+	tags := strings.Trim(strings.Join([]string{industry, size}, ","), ",")
+	notes := compactNotes(map[string]string{
+		"发票金额":  value("发票金额(元)", 1),
+		"是否已收集": value("是否已收集", 2),
+		"官网":    value("官网", 5),
+		"数据来源":  value("数据来源", 6),
+		"收集时间":  value("收集时间", 7),
+	})
+	return models.Contact{
+		Name:    company,
+		Email:   email,
+		Company: company,
+		Phone:   phone,
+		Tags:    tags,
+		Notes:   notes,
+	}
+}
+
+func headerMap(record []string) map[string]int {
+	header := map[string]int{}
+	for index, value := range record {
+		header[strings.TrimSpace(value)] = index
+	}
+	return header
+}
+
+func hasKnownHeader(header map[string]int) bool {
+	_, hasEmailCN := header["邮箱"]
+	_, hasEmailEN := header["email"]
+	_, hasCompany := header["公司名"]
+	return hasEmailCN || hasEmailEN || hasCompany
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func compactNotes(values map[string]string) string {
+	parts := []string{}
+	for key, value := range values {
+		if strings.TrimSpace(value) != "" {
+			parts = append(parts, key+"："+strings.TrimSpace(value))
+		}
+	}
+	return strings.Join(parts, "；")
+}
+
 func closeRows(rows *sql.Rows) {
 	if rows != nil {
 		_ = rows.Close()
 	}
-}
-
-func looksLikePrefetch(ua string) bool {
-	ua = strings.ToLower(ua)
-	return strings.Contains(ua, "googleimageproxy") || strings.Contains(ua, "apple") && strings.Contains(ua, "mail")
 }
 
 func serveEmbedded(c *gin.Context, dist fs.FS, path string) {
@@ -499,4 +673,17 @@ func serveEmbedded(c *gin.Context, dist fs.FS, path string) {
 		contentType = "text/html; charset=utf-8"
 	}
 	c.Data(http.StatusOK, contentType, data)
+}
+
+func trackingBaseURL(c *gin.Context) string {
+	if value := strings.TrimSpace(os.Getenv("TRACKING_BASE_URL")); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(c.GetHeader("X-Tracking-Base-URL")); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(c.GetHeader("X-Base-URL")); value != "" {
+		return value
+	}
+	return "http://" + c.Request.Host
 }

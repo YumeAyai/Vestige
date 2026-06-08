@@ -37,11 +37,11 @@ onMounted(load)
     <div class="page-head">
       <div>
         <h1>联系人</h1>
-        <p class="muted">CSV 字段顺序：姓名、邮箱、公司、部门、手机号、标签、备注。</p>
+        <p class="muted">支持导入 xlsx / csv；会自动识别“公司名、邮箱、联系电话、官网、行业、规模”等字段。</p>
       </div>
       <label class="button secondary">
-        导入 CSV
-        <input type="file" accept=".csv" style="display:none" :disabled="importing" @change="upload" />
+        导入名单
+        <input type="file" accept=".xlsx,.csv" style="display:none" :disabled="importing" @change="upload" />
       </label>
     </div>
     <form class="panel grid four" style="margin-bottom:16px" @submit.prevent="save">
