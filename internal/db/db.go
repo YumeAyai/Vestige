@@ -95,6 +95,30 @@ CREATE TABLE IF NOT EXISTS open_events (
   is_prefetch INTEGER NOT NULL DEFAULT 0,
   opened_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(campaign_recipient_id) REFERENCES campaign_recipients(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS tracking_marks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  campaign_recipient_id INTEGER NOT NULL,
+  token TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  label TEXT NOT NULL DEFAULT '',
+  target_url TEXT NOT NULL DEFAULT '',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(campaign_recipient_id) REFERENCES campaign_recipients(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS tracking_mark_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  mark_id INTEGER,
+  token TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT '',
+  source TEXT NOT NULL DEFAULT 'local',
+  ip TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT '',
+  raw_payload TEXT NOT NULL DEFAULT '',
+  triggered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(mark_id) REFERENCES tracking_marks(id) ON DELETE SET NULL
 );`
 	_, err := conn.Exec(schema)
 	return err

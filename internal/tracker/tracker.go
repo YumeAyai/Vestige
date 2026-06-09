@@ -5,6 +5,8 @@ import (
 	"encoding/base64"
 	"net/url"
 	"strings"
+
+	qrcode "github.com/skip2/go-qrcode"
 )
 
 var PixelGIF []byte
@@ -19,8 +21,18 @@ type Event struct {
 	UserAgent  string
 }
 
+type MarkEvent struct {
+	Token     string
+	Kind      string
+	Source    string
+	IP        string
+	UserAgent string
+	Raw       string
+}
+
 type Recorder interface {
 	RecordOpen(event Event) error
+	RecordMark(event MarkEvent) error
 }
 
 type SQLiteRecorder struct {
@@ -54,8 +66,47 @@ func (r SQLiteRecorder) RecordOpen(event Event) error {
 	return err
 }
 
+func (r SQLiteRecorder) RecordMark(event MarkEvent) error {
+	var markID int64
+	var kind string
+	if err := r.db.QueryRow(`SELECT id,kind FROM tracking_marks WHERE token=?`, event.Token).Scan(&markID, &kind); err != nil {
+		markID = 0
+		kind = event.Kind
+	}
+	source := event.Source
+	if source == "" {
+		source = "local"
+	}
+	_, err := r.db.Exec(
+		`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?)`,
+		markID,
+		event.Token,
+		firstNonEmpty(kind, event.Kind),
+		source,
+		event.IP,
+		event.UserAgent,
+		event.Raw,
+	)
+	return err
+}
+
 func PixelURL(baseURL, trackingID string) string {
 	return strings.TrimRight(baseURL, "/") + "/api/track/open.gif?tid=" + url.QueryEscape(trackingID)
+}
+
+func MarkImageURL(baseURL, token string) string {
+	return strings.TrimRight(baseURL, "/") + "/api/track/qrcode.png?token=" + url.QueryEscape(token)
+}
+
+func QRCodeHTML(baseURL, token string) string {
+	return `<img src="` + MarkImageURL(baseURL, token) + `" width="132" height="132" alt="二维码" style="width:132px;height:132px;border:0" />`
+}
+
+func QRCodePNG(target string, size int) ([]byte, error) {
+	if size <= 0 {
+		size = 160
+	}
+	return qrcode.Encode(target, qrcode.Medium, size)
 }
 
 func InjectPixel(body, baseURL, trackingID string) string {
@@ -69,4 +120,13 @@ func InjectPixel(body, baseURL, trackingID string) string {
 func LooksLikePrefetch(userAgent string) bool {
 	ua := strings.ToLower(userAgent)
 	return strings.Contains(ua, "googleimageproxy") || strings.Contains(ua, "apple") && strings.Contains(ua, "mail")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

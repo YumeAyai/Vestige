@@ -15,6 +15,7 @@ type Personalization struct {
 	Contact   models.Contact
 	Recipient models.Recipient
 	Campaign  models.Campaign
+	QRCode    template.HTML
 }
 
 func RenderBody(body string, data Personalization) (string, error) {
@@ -23,13 +24,14 @@ func RenderBody(body string, data Personalization) (string, error) {
 		return "", err
 	}
 	var buf bytes.Buffer
-	if err := tpl.Execute(&buf, map[string]string{
+	if err := tpl.Execute(&buf, map[string]any{
 		"Name":       data.Contact.Name,
 		"Email":      data.Contact.Email,
 		"Company":    data.Contact.Company,
 		"Department": data.Contact.Department,
 		"Phone":      data.Contact.Phone,
 		"Tags":       data.Contact.Tags,
+		"QRCode":     data.QRCode,
 	}); err != nil {
 		return "", err
 	}

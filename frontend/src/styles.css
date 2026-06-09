@@ -45,6 +45,11 @@ h2 {
   padding: 24px 18px;
 }
 
+.mobile-topbar,
+.drawer-backdrop {
+  display: none;
+}
+
 .brand {
   display: flex;
   gap: 12px;
@@ -433,17 +438,82 @@ td a {
 
 @media (max-width: 760px) {
   .shell {
-    grid-template-columns: 1fr;
+    display: block;
   }
 
   .sidebar {
-    border-bottom: 1px solid #dfe8e3;
-    border-right: 0;
-    padding: 18px;
+    border-right: 1px solid #dfe8e3;
+    bottom: 0;
+    box-shadow: 18px 0 44px rgba(20, 32, 51, 0.14);
+    left: 0;
+    max-width: calc(100vw - 56px);
+    padding: 20px 16px;
+    position: fixed;
+    top: 0;
+    transform: translateX(-105%);
+    transition: transform 0.2s ease;
+    width: 282px;
+    z-index: 30;
+  }
+
+  .drawer-open .sidebar {
+    transform: translateX(0);
   }
 
   nav {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: 1fr;
+  }
+
+  .mobile-topbar {
+    align-items: center;
+    background: rgba(255, 255, 255, 0.94);
+    border-bottom: 1px solid #dfe8e3;
+    display: flex;
+    gap: 12px;
+    height: 64px;
+    padding: 12px 16px;
+    position: sticky;
+    top: 0;
+    z-index: 20;
+  }
+
+  .menu-button {
+    min-height: 38px;
+    padding: 8px 12px;
+  }
+
+  .mobile-title {
+    display: grid;
+    gap: 1px;
+  }
+
+  .mobile-title strong {
+    font-size: 15px;
+  }
+
+  .mobile-title span {
+    color: #687b72;
+    font-size: 12px;
+  }
+
+  .drawer-backdrop {
+    background: rgba(20, 32, 51, 0.32);
+    border: 0;
+    border-radius: 0;
+    bottom: 0;
+    display: block;
+    left: 0;
+    min-height: 0;
+    padding: 0;
+    position: fixed;
+    right: 0;
+    top: 0;
+    z-index: 25;
+  }
+
+  .drawer-backdrop:hover {
+    background: rgba(20, 32, 51, 0.32);
+    box-shadow: none;
   }
 
   .content {

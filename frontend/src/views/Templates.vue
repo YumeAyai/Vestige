@@ -8,7 +8,8 @@ const previewError = ref('')
 const form = reactive({
   name: '市场调查邀请',
   subject: '请协助完成 {{.Company}} 调研问卷',
-  body_html: '<p>{{.Name}} 您好：</p><p>我们正在开展一项市场调查，想邀请您协助填写问卷。</p><p>谢谢支持。</p>'
+  body_html:
+    '<p>{{.Name}} 您好：</p><p>我们正在开展一项市场调查，想邀请您协助填写问卷。</p><p>{{.QRCode}}</p><p>谢谢支持。</p>',
 })
 const sample = reactive({
   name: '上海示例企业有限公司',
@@ -57,7 +58,7 @@ onMounted(renderPreview)
     <div class="page-head">
       <div>
         <h1>邮件模板</h1>
-        <p class="muted" v-pre>支持变量：{{.Name}}、{{.Company}}、{{.Department}}、{{.Email}}。</p>
+        <p class="muted" v-pre>支持变量：{{.Name}}、{{.Company}}、{{.Department}}、{{.Email}}、{{.QRCode}}。</p>
       </div>
     </div>
     <div class="grid two">

@@ -55,6 +55,50 @@ https://track.your-company.com/api/track/open.gif?tid=...
 
 后续如果拆到 Lambda，Lambda 只需要实现同样的 GET 接口，并把事件写回数据库、Webhook 或队列。
 
+## 图片触发点
+
+除默认打开像素外，模板里的图片型变量也会自动进入埋点体系。当前支持：
+
+```text
+{{.QRCode}}
+```
+
+发送时，本地会为每个收件人创建一条 `tracking_marks`：
+
+```text
+campaign_recipient_id
+token
+kind = qrcode
+label = QRCode
+target_url
+```
+
+模板变量会渲染为：
+
+```html
+<img src="https://track.example.com/api/track/qrcode.png?token=..." width="132" height="132" />
+```
+
+图片被邮件客户端加载时，tracker 记录一条 `tracking_mark_events`。如果图片服务部署在云端，云端只需要保存触发列表，例如：
+
+```json
+{
+  "token": "mark-token",
+  "kind": "qrcode",
+  "triggered_at": "2026-06-09T10:00:00Z",
+  "ip": "203.0.113.1",
+  "user_agent": "..."
+}
+```
+
+本地通过下面接口导入云端事件，再用 token 和本地 `tracking_marks` / `campaign_recipients` 做比对分析：
+
+```text
+POST /api/tracking/cloud-events/import
+```
+
+这样云端不需要保存公司名单、邮箱、联系人等敏感信息，只保存不可读的 token 触发记录。
+
 ## 注意
 
 阅读追踪只能说明“图片被请求过”，不等于真人一定阅读。Apple Mail、Gmail 图片代理、安全网关都可能预加载或代理请求。

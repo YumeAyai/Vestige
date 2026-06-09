@@ -1,6 +1,35 @@
+<script setup>
+import { ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
+
+const route = useRoute()
+const drawerOpen = ref(false)
+
+watch(
+  () => route.fullPath,
+  () => {
+    drawerOpen.value = false
+  },
+)
+</script>
+
 <template>
-  <div class="shell">
-    <aside class="sidebar">
+  <div class="shell" :class="{ 'drawer-open': drawerOpen }">
+    <header class="mobile-topbar">
+      <button class="menu-button secondary" type="button" @click="drawerOpen = true">菜单</button>
+      <div class="mobile-title">
+        <strong>Nous Mail</strong>
+        <span>调研邮件监控</span>
+      </div>
+    </header>
+    <button
+      v-if="drawerOpen"
+      class="drawer-backdrop"
+      type="button"
+      aria-label="关闭导航"
+      @click="drawerOpen = false"
+    ></button>
+    <aside class="sidebar" :aria-hidden="!drawerOpen">
       <div class="brand">
         <span class="mark">N</span>
         <div>

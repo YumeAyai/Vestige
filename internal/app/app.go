@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
+	"html/template"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -52,6 +54,8 @@ func New(db *sql.DB, frontend fs.FS) *gin.Engine {
 	api.GET("/campaigns/:id/recipients", s.listRecipients)
 	api.GET("/campaigns/:id/export.csv", s.exportCampaignCSV)
 	api.GET("/track/open.gif", s.trackOpen)
+	api.GET("/track/qrcode.png", s.trackQRCode)
+	api.POST("/tracking/cloud-events/import", s.importCloudTrackingEvents)
 
 	dist, err := fs.Sub(frontend, "dist")
 	if err == nil {
@@ -287,7 +291,11 @@ func (s *Server) previewTemplate(c *gin.Context) {
 	if input.Contact.Phone == "" {
 		input.Contact.Phone = "021-00000000"
 	}
-	body, err := mailer.RenderBody(input.BodyHTML, mailer.Personalization{Contact: input.Contact})
+	body, err := mailer.RenderBody(input.BodyHTML, mailer.Personalization{
+		BaseURL: trackingBaseURL(c),
+		Contact: input.Contact,
+		QRCode:  template.HTML(tracker.QRCodeHTML(trackingBaseURL(c), "preview")),
+	})
 	if err != nil {
 		fail(c, err)
 		return
@@ -408,7 +416,17 @@ func (s *Server) sendCampaign(c *gin.Context) {
 			return
 		}
 		contact.ID, contact.Name, contact.Email = rec.ContactID, rec.Name, rec.Email
-		data := mailer.Personalization{BaseURL: baseURL, Contact: contact, Recipient: rec, Campaign: campaign}
+		qrHTML := template.HTML("")
+		if templateUsesQRCode(campaign.BodyHTML) {
+			markToken, err := s.ensureTrackingMark(rec.ID, "qrcode", "QRCode", qrcodeTargetURL(baseURL, rec.TrackingID))
+			if err != nil {
+				_, _ = s.db.Exec(`UPDATE campaign_recipients SET send_status='failed',failure_reason=? WHERE id=?`, err.Error(), rec.ID)
+				failed++
+				continue
+			}
+			qrHTML = template.HTML(tracker.QRCodeHTML(baseURL, markToken))
+		}
+		data := mailer.Personalization{BaseURL: baseURL, Contact: contact, Recipient: rec, Campaign: campaign, QRCode: qrHTML}
 		subject, err := mailer.RenderBody(campaign.Subject, data)
 		if err != nil {
 			_, _ = s.db.Exec(`UPDATE campaign_recipients SET send_status='failed',failure_reason=? WHERE id=?`, err.Error(), rec.ID)
@@ -496,6 +514,64 @@ func (s *Server) trackOpen(c *gin.Context) {
 	c.Header("Content-Type", "image/gif")
 	c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
 	c.Data(http.StatusOK, "image/gif", tracker.PixelGIF)
+}
+
+func (s *Server) trackQRCode(c *gin.Context) {
+	token := c.Query("token")
+	if token != "" && token != "preview" {
+		_ = s.tracker.RecordMark(tracker.MarkEvent{
+			Token:     token,
+			Kind:      "qrcode",
+			Source:    "local",
+			IP:        c.ClientIP(),
+			UserAgent: c.GetHeader("User-Agent"),
+		})
+	}
+	target := qrcodeTargetURL(trackingBaseURL(c), token)
+	if token == "preview" {
+		target = "https://example.com/survey"
+	}
+	png, err := tracker.QRCodePNG(target, 176)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	c.Header("Content-Type", "image/png")
+	c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+	c.Data(http.StatusOK, "image/png", png)
+}
+
+type cloudTrackingEventInput struct {
+	Token       string `json:"token"`
+	Kind        string `json:"kind"`
+	TriggeredAt string `json:"triggered_at"`
+	IP          string `json:"ip"`
+	UserAgent   string `json:"user_agent"`
+}
+
+type importCloudTrackingEventsInput struct {
+	Events []cloudTrackingEventInput `json:"events"`
+}
+
+func (s *Server) importCloudTrackingEvents(c *gin.Context) {
+	var input importCloudTrackingEventsInput
+	if bind(c, &input) != nil {
+		return
+	}
+	imported := 0
+	for _, event := range input.Events {
+		if strings.TrimSpace(event.Token) == "" {
+			continue
+		}
+		raw, _ := json.Marshal(event)
+		err := s.recordCloudMarkEvent(event, string(raw))
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		imported++
+	}
+	c.JSON(http.StatusOK, gin.H{"imported": imported})
 }
 
 func (s *Server) exportCampaignCSV(c *gin.Context) {
@@ -662,6 +738,69 @@ func closeRows(rows *sql.Rows) {
 	}
 }
 
+func (s *Server) ensureTrackingMark(recipientID int64, kind, label, targetURL string) (string, error) {
+	var token string
+	err := s.db.QueryRow(`SELECT token FROM tracking_marks WHERE campaign_recipient_id=? AND kind=?`, recipientID, kind).Scan(&token)
+	if err == nil {
+		return token, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	token = uuid.NewString()
+	_, err = s.db.Exec(
+		`INSERT INTO tracking_marks(campaign_recipient_id,token,kind,label,target_url) VALUES(?,?,?,?,?)`,
+		recipientID,
+		token,
+		kind,
+		label,
+		targetURL,
+	)
+	return token, err
+}
+
+func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string) error {
+	var markID int64
+	var kind string
+	_ = s.db.QueryRow(`SELECT id,kind FROM tracking_marks WHERE token=?`, event.Token).Scan(&markID, &kind)
+	if event.Kind != "" {
+		kind = event.Kind
+	}
+	if kind == "" {
+		kind = "unknown"
+	}
+	triggeredAt := strings.TrimSpace(event.TriggeredAt)
+	if triggeredAt == "" {
+		_, err := s.db.Exec(
+			`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?)`,
+			markID,
+			event.Token,
+			kind,
+			"cloud",
+			event.IP,
+			event.UserAgent,
+			raw,
+		)
+		return err
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,raw_payload,triggered_at) VALUES(NULLIF(?,0),?,?,?,?,?,?,?)`,
+		markID,
+		event.Token,
+		kind,
+		"cloud",
+		event.IP,
+		event.UserAgent,
+		raw,
+		triggeredAt,
+	)
+	return err
+}
+
+func templateUsesQRCode(body string) bool {
+	return strings.Contains(body, ".QRCode")
+}
+
 func serveEmbedded(c *gin.Context, dist fs.FS, path string) {
 	data, err := fs.ReadFile(dist, path)
 	if err != nil {
@@ -686,4 +825,15 @@ func trackingBaseURL(c *gin.Context) string {
 		return value
 	}
 	return "http://" + c.Request.Host
+}
+
+func qrcodeTargetURL(baseURL, token string) string {
+	if value := strings.TrimSpace(os.Getenv("QR_CODE_TARGET_URL")); value != "" {
+		separator := "?"
+		if strings.Contains(value, "?") {
+			separator = "&"
+		}
+		return value + separator + "t=" + token
+	}
+	return strings.TrimRight(baseURL, "/") + "/q/" + token
 }
