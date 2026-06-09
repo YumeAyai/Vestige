@@ -440,6 +440,40 @@ td a {
   font-weight: 720;
 }
 
+.col-company {
+  min-width: 260px;
+  width: 34%;
+}
+
+.company-cell {
+  color: #17233c;
+  font-weight: 720;
+  min-width: 240px;
+}
+
+.notes-cell {
+  color: #687b72;
+  max-width: 320px;
+}
+
+.email-chip {
+  background: #e6f5ef;
+  border: 1px solid #bfe9d9;
+  border-radius: 999px;
+  color: #007a5a;
+  display: inline-flex;
+  font-size: 13px;
+  font-weight: 720;
+  line-height: 1.2;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 6px 10px;
+}
+
+.contact-table {
+  table-layout: auto;
+}
+
 .status {
   border: 1px solid transparent;
   border-radius: 999px;

@@ -129,7 +129,7 @@ onMounted(load)
       <table>
         <thead>
           <tr>
-            <th>姓名</th>
+            <th class="col-company">公司</th>
             <th>邮箱</th>
             <th>发送</th>
             <th>阅读次数</th>
@@ -139,8 +139,8 @@ onMounted(load)
         </thead>
         <tbody>
           <tr v-for="item in visibleRecipients" :key="item.id">
-            <td>{{ item.name }}</td>
-            <td>{{ item.email }}</td>
+            <td class="company-cell">{{ item.name }}</td>
+            <td><span class="email-chip">{{ item.email }}</span></td>
             <td>
               <span class="status" :class="item.send_status">{{ item.send_status }}</span>
             </td>
