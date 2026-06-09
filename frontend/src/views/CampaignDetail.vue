@@ -14,6 +14,8 @@ const filter = ref('all')
 
 const visibleRecipients = computed(() => {
   if (filter.value === 'opened') return recipients.value.filter((item) => item.open_count > 0)
+  if (filter.value === 'qr_loaded') return recipients.value.filter((item) => item.qr_load_count > 0)
+  if (filter.value === 'qr_unloaded') return recipients.value.filter((item) => item.qr_load_count === 0)
   if (filter.value === 'unopened') return recipients.value.filter((item) => item.open_count === 0)
   if (filter.value === 'failed')
     return recipients.value.filter((item) => item.send_status === 'failed')
@@ -31,13 +33,22 @@ async function load() {
 function renderChart() {
   if (!chartEl.value) return
   const chart = echarts.init(chartEl.value)
+  const hours = Array.from(
+    new Set([
+      ...stats.value.trend.map((item) => item.hour),
+      ...(stats.value.qr_trend || []).map((item) => item.hour),
+    ]),
+  ).sort()
+  const pixelByHour = new Map(stats.value.trend.map((item) => [item.hour, item.count]))
+  const qrByHour = new Map((stats.value.qr_trend || []).map((item) => [item.hour, item.count]))
   chart.setOption({
-    color: ['#00a376'],
+    color: ['#00a376', '#3656a6'],
     grid: { left: 36, right: 18, top: 28, bottom: 36 },
     tooltip: { trigger: 'axis' },
+    legend: { top: 0, right: 8, textStyle: { color: '#687b72' } },
     xAxis: {
       type: 'category',
-      data: stats.value.trend.map((item) => item.hour),
+      data: hours,
       axisLine: { lineStyle: { color: '#d8e3dd' } },
       axisLabel: { color: '#687b72' },
     },
@@ -49,13 +60,22 @@ function renderChart() {
     },
     series: [
       {
-        name: '阅读次数',
+        name: '像素加载',
         type: 'line',
         smooth: true,
         symbolSize: 7,
         lineStyle: { width: 3 },
         areaStyle: { color: 'rgba(0, 163, 118, 0.12)' },
-        data: stats.value.trend.map((item) => item.count),
+        data: hours.map((hour) => pixelByHour.get(hour) || 0),
+      },
+      {
+        name: '二维码加载',
+        type: 'line',
+        smooth: true,
+        symbolSize: 7,
+        lineStyle: { width: 3 },
+        areaStyle: { color: 'rgba(54, 86, 166, 0.1)' },
+        data: hours.map((hour) => qrByHour.get(hour) || 0),
       },
     ],
   })
@@ -89,7 +109,7 @@ onMounted(load)
       </div>
     </div>
 
-    <div class="grid four">
+    <div class="grid five">
       <div class="card metric">
         <strong>{{ stats.summary.total || 0 }}</strong
         ><span>收件人</span>
@@ -100,7 +120,11 @@ onMounted(load)
       </div>
       <div class="card metric">
         <strong>{{ stats.summary.opened || 0 }}</strong
-        ><span>已阅读</span>
+        ><span>像素加载人数</span>
+      </div>
+      <div class="card metric">
+        <strong>{{ stats.summary.qr_loaded || 0 }}</strong
+        ><span>二维码加载人数</span>
       </div>
       <div class="card metric">
         <strong>{{ stats.summary.failed || 0 }}</strong
@@ -109,7 +133,7 @@ onMounted(load)
     </div>
 
     <div class="panel" style="margin-top: 16px">
-      <h2>阅读趋势</h2>
+      <h2>加载趋势</h2>
       <div ref="chartEl" class="chart"></div>
     </div>
 
@@ -117,12 +141,14 @@ onMounted(load)
       <div class="page-head">
         <div>
           <h2>收件人明细</h2>
-          <p class="muted">阅读状态基于图片加载判断，数据用于跟进参考。</p>
+          <p class="muted">二维码加载是正文图片请求记录，比普通像素更适合判断邮件内容是否被加载。</p>
         </div>
         <select v-model="filter" style="max-width: 180px">
           <option value="all">全部</option>
-          <option value="opened">已阅读</option>
-          <option value="unopened">未阅读</option>
+          <option value="qr_loaded">二维码已加载</option>
+          <option value="qr_unloaded">二维码未加载</option>
+          <option value="opened">像素已加载</option>
+          <option value="unopened">像素未加载</option>
           <option value="failed">发送失败</option>
         </select>
       </div>
@@ -132,8 +158,10 @@ onMounted(load)
             <th class="col-company">公司</th>
             <th>邮箱</th>
             <th>发送</th>
-            <th>阅读次数</th>
-            <th>首次阅读</th>
+            <th>二维码加载</th>
+            <th>首次二维码加载</th>
+            <th>最近 IP</th>
+            <th>像素加载</th>
             <th>失败原因</th>
           </tr>
         </thead>
@@ -144,8 +172,10 @@ onMounted(load)
             <td>
               <span class="status" :class="item.send_status">{{ item.send_status }}</span>
             </td>
+            <td>{{ item.qr_load_count }}</td>
+            <td>{{ item.first_qr_load_at || '-' }}</td>
+            <td>{{ item.last_qr_ip || '-' }}</td>
             <td>{{ item.open_count }}</td>
-            <td>{{ item.first_opened_at || '-' }}</td>
             <td>{{ item.failure_reason }}</td>
           </tr>
         </tbody>

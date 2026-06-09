@@ -55,9 +55,9 @@ https://track.your-company.com/api/track/open.gif?tid=...
 
 后续如果拆到 Lambda，Lambda 只需要实现同样的 GET 接口，并把事件写回数据库、Webhook 或队列。
 
-## 图片触发点
+## 二维码图片触发点
 
-除默认打开像素外，模板里的图片型变量也会自动进入埋点体系。当前支持：
+除默认打开像素外，模板里的二维码变量也会进入埋点体系。当前支持：
 
 ```text
 {{.QRCode}}
@@ -87,7 +87,9 @@ target_url
   "kind": "qrcode",
   "triggered_at": "2026-06-09T10:00:00Z",
   "ip": "203.0.113.1",
-  "user_agent": "..."
+  "user_agent": "...",
+  "referer": "",
+  "accept_language": "zh-CN,zh;q=0.9"
 }
 ```
 
@@ -98,6 +100,48 @@ POST /api/tracking/cloud-events/import
 ```
 
 这样云端不需要保存公司名单、邮箱、联系人等敏感信息，只保存不可读的 token 触发记录。
+
+## 现在能收集到的信息
+
+二维码图片请求发生时，本地后端或云端 tracker 可以收集：
+
+- `token`：不可读的二维码埋点 token，用来回连本地 `tracking_marks`
+- `kind`：当前为 `qrcode`
+- `triggered_at`：二维码图片被请求的时间
+- `ip`：请求来源 IP，可能是邮件客户端代理或安全网关 IP
+- `user_agent`：请求 UA，可能是邮件客户端、图片代理或安全扫描器
+- `referer`：通常为空，但保留字段
+- `accept_language`：请求语言，可辅助判断环境
+- `is_prefetch`：基于 UA 的弱判断，当前识别 Google image proxy 和 Apple Mail 类请求
+- `raw_payload`：云端或本地保留的原始事件 JSON，方便后续补充解析
+
+不建议把这个事件直接命名为“真实查看”。产品侧更准确的口径是：
+
+```text
+二维码加载时间 / 正文图片加载时间 / 内容加载推测
+```
+
+## 统计服务器和后台交互
+
+推荐生产部署采用“两层”模式：
+
+```text
+邮件客户端
+  -> 公网 tracker: GET /api/track/qrcode.png?token=...
+  -> tracker 立即返回二维码 PNG，并异步记录事件
+  -> 后台定时或手动调用 POST /api/tracking/cloud-events/import 导入事件
+  -> 后台用 token 关联 campaign_recipient，生成任务统计和收件人明细
+```
+
+交互契约：
+
+1. 后台发送邮件前，为每个收件人的二维码生成 `tracking_marks.token`。
+2. 邮件正文里的 `{{.QRCode}}` 渲染为 tracker 的二维码图片 URL。
+3. tracker 不保存邮箱、联系人、公司名，只保存 token 和请求环境。
+4. tracker 需要尽快返回图片，事件写入可以同步写本地表、队列或日志。
+5. 后台导入事件后，通过 `token -> tracking_marks -> campaign_recipients` 做归因。
+6. 后台 API `GET /api/campaigns/:id/stats` 返回普通像素趋势和二维码加载趋势。
+7. 后台 API `GET /api/campaigns/:id/recipients` 返回每个收件人的二维码加载次数、首次加载、最近加载和最近 IP/UA。
 
 ## 注意
 

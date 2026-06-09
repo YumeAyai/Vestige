@@ -41,7 +41,10 @@ func New(db *sql.DB, frontend fs.FS) *gin.Engine {
 	api.POST("/mailboxes", s.createMailbox)
 	api.DELETE("/mailboxes/:id", s.deleteMailbox)
 	api.GET("/contacts", s.listContacts)
+	api.GET("/contacts/page", s.pageContacts)
 	api.POST("/contacts", s.createContact)
+	api.PATCH("/contacts/batch", s.updateContactsBatch)
+	api.DELETE("/contacts/batch", s.deleteContactsBatch)
 	api.POST("/contacts/import", s.importContacts)
 	api.GET("/templates", s.listTemplates)
 	api.POST("/templates", s.createTemplate)
@@ -155,6 +158,60 @@ func (s *Server) listContacts(c *gin.Context) {
 	c.JSON(http.StatusOK, items)
 }
 
+func (s *Server) pageContacts(c *gin.Context) {
+	limit := queryInt(c, "limit", 20)
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	offset := queryInt(c, "offset", 0)
+	if offset < 0 {
+		offset = 0
+	}
+	q := strings.TrimSpace(c.Query("q"))
+
+	where := ""
+	args := []any{}
+	if q != "" {
+		where = `WHERE name LIKE ? OR email LIKE ? OR company LIKE ? OR phone LIKE ? OR tags LIKE ? OR notes LIKE ?`
+		like := "%" + q + "%"
+		args = append(args, like, like, like, like, like, like)
+	}
+
+	var total int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM contacts `+where, args...).Scan(&total); err != nil {
+		fail(c, err)
+		return
+	}
+
+	pageArgs := append([]any{}, args...)
+	pageArgs = append(pageArgs, limit, offset)
+	rows, err := s.db.Query(`SELECT id,name,email,company,department,phone,tags,notes FROM contacts `+where+` ORDER BY id DESC LIMIT ? OFFSET ?`, pageArgs...)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	defer rows.Close()
+
+	items := []models.Contact{}
+	for rows.Next() {
+		var item models.Contact
+		if err := rows.Scan(&item.ID, &item.Name, &item.Email, &item.Company, &item.Department, &item.Phone, &item.Tags, &item.Notes); err != nil {
+			fail(c, err)
+			return
+		}
+		items = append(items, item)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"items":  items,
+		"total":  total,
+		"limit":  limit,
+		"offset": offset,
+	})
+}
+
 func (s *Server) createContact(c *gin.Context) {
 	var input models.Contact
 	if bind(c, &input) != nil {
@@ -171,6 +228,57 @@ func (s *Server) createContact(c *gin.Context) {
 	}
 	input.ID, _ = res.LastInsertId()
 	c.JSON(http.StatusCreated, input)
+}
+
+type contactBatchInput struct {
+	IDs   []int64 `json:"ids"`
+	Tags  string  `json:"tags"`
+	Notes string  `json:"notes"`
+}
+
+func (s *Server) updateContactsBatch(c *gin.Context) {
+	var input contactBatchInput
+	if bind(c, &input) != nil {
+		return
+	}
+	if len(input.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择联系人"})
+		return
+	}
+	updated := 0
+	for _, id := range input.IDs {
+		res, err := s.db.Exec(`UPDATE contacts SET tags=CASE WHEN ?='' THEN tags ELSE ? END, notes=CASE WHEN ?='' THEN notes ELSE ? END WHERE id=?`,
+			input.Tags, input.Tags, input.Notes, input.Notes, id)
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		affected, _ := res.RowsAffected()
+		updated += int(affected)
+	}
+	c.JSON(http.StatusOK, gin.H{"updated": updated})
+}
+
+func (s *Server) deleteContactsBatch(c *gin.Context) {
+	var input contactBatchInput
+	if bind(c, &input) != nil {
+		return
+	}
+	if len(input.IDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请选择联系人"})
+		return
+	}
+	deleted := 0
+	for _, id := range input.IDs {
+		res, err := s.db.Exec(`DELETE FROM contacts WHERE id=? AND NOT EXISTS (SELECT 1 FROM campaign_recipients WHERE contact_id=?)`, id, id)
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		affected, _ := res.RowsAffected()
+		deleted += int(affected)
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": deleted})
 }
 
 func (s *Server) importContacts(c *gin.Context) {
@@ -460,14 +568,41 @@ func (s *Server) sendCampaign(c *gin.Context) {
 func (s *Server) campaignStats(c *gin.Context) {
 	id := c.Param("id")
 	var stats struct {
-		Total    int `json:"total"`
-		Sent     int `json:"sent"`
-		Failed   int `json:"failed"`
-		Opened   int `json:"opened"`
-		Unopened int `json:"unopened"`
+		Total          int `json:"total"`
+		Sent           int `json:"sent"`
+		Failed         int `json:"failed"`
+		Opened         int `json:"opened"`
+		Unopened       int `json:"unopened"`
+		QRLoaded       int `json:"qr_loaded"`
+		QRLoadEvents   int `json:"qr_load_events"`
+		QRNotLoaded    int `json:"qr_not_loaded"`
+		PrefetchEvents int `json:"prefetch_events"`
 	}
-	_ = s.db.QueryRow(`SELECT COUNT(*), SUM(send_status='sent'), SUM(send_status='failed'), SUM(open_count>0), SUM(open_count=0) FROM campaign_recipients WHERE campaign_id=?`, id).
-		Scan(&stats.Total, &stats.Sent, &stats.Failed, &stats.Opened, &stats.Unopened)
+	_ = s.db.QueryRow(`
+		SELECT
+			COUNT(*),
+			COALESCE(SUM(send_status='sent'),0),
+			COALESCE(SUM(send_status='failed'),0),
+			COALESCE(SUM(open_count>0),0),
+			COALESCE(SUM(open_count=0),0),
+			COALESCE(SUM(qr_load_count>0),0),
+			COALESCE(SUM(qr_load_count),0),
+			COALESCE(SUM(qr_load_count=0),0),
+			COALESCE(SUM(prefetch_count),0)
+		FROM (
+			SELECT
+				cr.id,
+				cr.send_status,
+				cr.open_count,
+				COUNT(tme.id) qr_load_count,
+				COALESCE(SUM(tme.is_prefetch),0) prefetch_count
+			FROM campaign_recipients cr
+			LEFT JOIN tracking_marks tm ON tm.campaign_recipient_id=cr.id AND tm.kind='qrcode'
+			LEFT JOIN tracking_mark_events tme ON tme.mark_id=tm.id AND tme.kind='qrcode'
+			WHERE cr.campaign_id=?
+			GROUP BY cr.id
+		)`, id).
+		Scan(&stats.Total, &stats.Sent, &stats.Failed, &stats.Opened, &stats.Unopened, &stats.QRLoaded, &stats.QRLoadEvents, &stats.QRNotLoaded, &stats.PrefetchEvents)
 
 	rows, _ := s.db.Query(`SELECT strftime('%Y-%m-%d %H:00', opened_at) hour, COUNT(*) FROM open_events oe JOIN campaign_recipients cr ON cr.id=oe.campaign_recipient_id WHERE cr.campaign_id=? GROUP BY hour ORDER BY hour`, id)
 	defer closeRows(rows)
@@ -480,11 +615,64 @@ func (s *Server) campaignStats(c *gin.Context) {
 			trend = append(trend, gin.H{"hour": hour, "count": count})
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"summary": stats, "trend": trend})
+	qrRows, _ := s.db.Query(`SELECT strftime('%Y-%m-%d %H:00', tme.triggered_at) hour, COUNT(*) FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id WHERE cr.campaign_id=? AND tme.kind='qrcode' GROUP BY hour ORDER BY hour`, id)
+	defer closeRows(qrRows)
+	qrTrend := []gin.H{}
+	if qrRows != nil {
+		for qrRows.Next() {
+			var hour string
+			var count int
+			_ = qrRows.Scan(&hour, &count)
+			qrTrend = append(qrTrend, gin.H{"hour": hour, "count": count})
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{"summary": stats, "trend": trend, "qr_trend": qrTrend})
 }
 
 func (s *Server) listRecipients(c *gin.Context) {
-	rows, err := s.db.Query(`SELECT id,campaign_id,contact_id,email,name,tracking_id,send_status,failure_reason,COALESCE(sent_at,''),COALESCE(first_opened_at,''),COALESCE(last_opened_at,''),open_count FROM campaign_recipients WHERE campaign_id=? ORDER BY id DESC`, c.Param("id"))
+	rows, err := s.db.Query(`
+		SELECT
+			cr.id,
+			cr.campaign_id,
+			cr.contact_id,
+			cr.email,
+			cr.name,
+			cr.tracking_id,
+			cr.send_status,
+			cr.failure_reason,
+			COALESCE(cr.sent_at,''),
+			COALESCE(cr.first_opened_at,''),
+			COALESCE(cr.last_opened_at,''),
+			cr.open_count,
+			COUNT(tme.id) qr_load_count,
+			COALESCE(MIN(tme.triggered_at),'') first_qr_load_at,
+			COALESCE(MAX(tme.triggered_at),'') last_qr_load_at,
+			COALESCE(
+				(
+					SELECT latest.ip
+					FROM tracking_mark_events latest
+					WHERE latest.mark_id=tm.id AND latest.kind='qrcode'
+					ORDER BY latest.triggered_at DESC, latest.id DESC
+					LIMIT 1
+				),
+				''
+			) last_qr_ip,
+			COALESCE(
+				(
+					SELECT latest.user_agent
+					FROM tracking_mark_events latest
+					WHERE latest.mark_id=tm.id AND latest.kind='qrcode'
+					ORDER BY latest.triggered_at DESC, latest.id DESC
+					LIMIT 1
+				),
+				''
+			) last_qr_user_agent
+		FROM campaign_recipients cr
+		LEFT JOIN tracking_marks tm ON tm.campaign_recipient_id=cr.id AND tm.kind='qrcode'
+		LEFT JOIN tracking_mark_events tme ON tme.mark_id=tm.id AND tme.kind='qrcode'
+		WHERE cr.campaign_id=?
+		GROUP BY cr.id
+		ORDER BY cr.id DESC`, c.Param("id"))
 	if err != nil {
 		fail(c, err)
 		return
@@ -493,7 +681,7 @@ func (s *Server) listRecipients(c *gin.Context) {
 	items := []models.Recipient{}
 	for rows.Next() {
 		var item models.Recipient
-		if err := rows.Scan(&item.ID, &item.CampaignID, &item.ContactID, &item.Email, &item.Name, &item.TrackingID, &item.SendStatus, &item.FailureReason, &item.SentAt, &item.FirstOpenedAt, &item.LastOpenedAt, &item.OpenCount); err != nil {
+		if err := rows.Scan(&item.ID, &item.CampaignID, &item.ContactID, &item.Email, &item.Name, &item.TrackingID, &item.SendStatus, &item.FailureReason, &item.SentAt, &item.FirstOpenedAt, &item.LastOpenedAt, &item.OpenCount, &item.QRLoadCount, &item.FirstQRLoadAt, &item.LastQRLoadAt, &item.LastQRIP, &item.LastQRUA); err != nil {
 			fail(c, err)
 			return
 		}
@@ -519,12 +707,24 @@ func (s *Server) trackOpen(c *gin.Context) {
 func (s *Server) trackQRCode(c *gin.Context) {
 	token := c.Query("token")
 	if token != "" && token != "preview" {
+		raw, _ := json.Marshal(gin.H{
+			"token":           token,
+			"kind":            "qrcode",
+			"ip":              c.ClientIP(),
+			"user_agent":      c.GetHeader("User-Agent"),
+			"referer":         c.GetHeader("Referer"),
+			"accept_language": c.GetHeader("Accept-Language"),
+			"forwarded_for":   c.GetHeader("X-Forwarded-For"),
+		})
 		_ = s.tracker.RecordMark(tracker.MarkEvent{
-			Token:     token,
-			Kind:      "qrcode",
-			Source:    "local",
-			IP:        c.ClientIP(),
-			UserAgent: c.GetHeader("User-Agent"),
+			Token:          token,
+			Kind:           "qrcode",
+			Source:         "local",
+			IP:             c.ClientIP(),
+			UserAgent:      c.GetHeader("User-Agent"),
+			Referer:        c.GetHeader("Referer"),
+			AcceptLanguage: c.GetHeader("Accept-Language"),
+			Raw:            string(raw),
 		})
 	}
 	target := qrcodeTargetURL(trackingBaseURL(c), token)
@@ -542,11 +742,13 @@ func (s *Server) trackQRCode(c *gin.Context) {
 }
 
 type cloudTrackingEventInput struct {
-	Token       string `json:"token"`
-	Kind        string `json:"kind"`
-	TriggeredAt string `json:"triggered_at"`
-	IP          string `json:"ip"`
-	UserAgent   string `json:"user_agent"`
+	Token          string `json:"token"`
+	Kind           string `json:"kind"`
+	TriggeredAt    string `json:"triggered_at"`
+	IP             string `json:"ip"`
+	UserAgent      string `json:"user_agent"`
+	Referer        string `json:"referer"`
+	AcceptLanguage string `json:"accept_language"`
 }
 
 type importCloudTrackingEventsInput struct {
@@ -772,25 +974,31 @@ func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string)
 	triggeredAt := strings.TrimSpace(event.TriggeredAt)
 	if triggeredAt == "" {
 		_, err := s.db.Exec(
-			`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?)`,
+			`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,referer,accept_language,is_prefetch,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?)`,
 			markID,
 			event.Token,
 			kind,
 			"cloud",
 			event.IP,
 			event.UserAgent,
+			event.Referer,
+			event.AcceptLanguage,
+			tracker.LooksLikePrefetch(event.UserAgent),
 			raw,
 		)
 		return err
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,raw_payload,triggered_at) VALUES(NULLIF(?,0),?,?,?,?,?,?,?)`,
+		`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,referer,accept_language,is_prefetch,raw_payload,triggered_at) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?)`,
 		markID,
 		event.Token,
 		kind,
 		"cloud",
 		event.IP,
 		event.UserAgent,
+		event.Referer,
+		event.AcceptLanguage,
+		tracker.LooksLikePrefetch(event.UserAgent),
 		raw,
 		triggeredAt,
 	)

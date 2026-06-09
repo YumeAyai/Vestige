@@ -55,4 +55,9 @@ type Recipient struct {
 	FirstOpenedAt string `json:"first_opened_at"`
 	LastOpenedAt  string `json:"last_opened_at"`
 	OpenCount     int    `json:"open_count"`
+	QRLoadCount   int    `json:"qr_load_count"`
+	FirstQRLoadAt string `json:"first_qr_load_at"`
+	LastQRLoadAt  string `json:"last_qr_load_at"`
+	LastQRIP      string `json:"last_qr_ip"`
+	LastQRUA      string `json:"last_qr_user_agent"`
 }

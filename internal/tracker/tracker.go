@@ -22,12 +22,14 @@ type Event struct {
 }
 
 type MarkEvent struct {
-	Token     string
-	Kind      string
-	Source    string
-	IP        string
-	UserAgent string
-	Raw       string
+	Token          string
+	Kind           string
+	Source         string
+	IP             string
+	UserAgent      string
+	Referer        string
+	AcceptLanguage string
+	Raw            string
 }
 
 type Recorder interface {
@@ -78,13 +80,16 @@ func (r SQLiteRecorder) RecordMark(event MarkEvent) error {
 		source = "local"
 	}
 	_, err := r.db.Exec(
-		`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?)`,
+		`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,referer,accept_language,is_prefetch,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?)`,
 		markID,
 		event.Token,
 		firstNonEmpty(kind, event.Kind),
 		source,
 		event.IP,
 		event.UserAgent,
+		event.Referer,
+		event.AcceptLanguage,
+		LooksLikePrefetch(event.UserAgent),
 		event.Raw,
 	)
 	return err

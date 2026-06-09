@@ -116,10 +116,52 @@ CREATE TABLE IF NOT EXISTS tracking_mark_events (
   source TEXT NOT NULL DEFAULT 'local',
   ip TEXT NOT NULL DEFAULT '',
   user_agent TEXT NOT NULL DEFAULT '',
+  referer TEXT NOT NULL DEFAULT '',
+  accept_language TEXT NOT NULL DEFAULT '',
+  is_prefetch INTEGER NOT NULL DEFAULT 0,
   raw_payload TEXT NOT NULL DEFAULT '',
   triggered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(mark_id) REFERENCES tracking_marks(id) ON DELETE SET NULL
 );`
-	_, err := conn.Exec(schema)
-	return err
+	if _, err := conn.Exec(schema); err != nil {
+		return err
+	}
+	return addColumns(conn, "tracking_mark_events", map[string]string{
+		"referer":         "TEXT NOT NULL DEFAULT ''",
+		"accept_language": "TEXT NOT NULL DEFAULT ''",
+		"is_prefetch":     "INTEGER NOT NULL DEFAULT 0",
+	})
+}
+
+func addColumns(conn *sql.DB, table string, columns map[string]string) error {
+	rows, err := conn.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for name, definition := range columns {
+		if existing[name] {
+			continue
+		}
+		if _, err := conn.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + name + ` ` + definition); err != nil {
+			return err
+		}
+	}
+	return nil
 }
