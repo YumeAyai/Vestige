@@ -232,7 +232,7 @@ onMounted(load)
             <tr>
               <th v-for="column in columns" :key="column.key" class="resizable-th">
                 <span v-if="column.key !== 'select'">{{ column.label }}</span>
-                <input v-else type="checkbox" :checked="allPageSelected" @change="togglePage" />
+                <input v-else class="contact-check" type="checkbox" :checked="allPageSelected" @change="togglePage" />
                 <button
                   v-if="column.key !== 'select'"
                   class="resize-handle"
@@ -246,7 +246,7 @@ onMounted(load)
           </thead>
           <tbody>
             <tr v-for="item in items" :key="item.id">
-              <td class="select-cell"><input type="checkbox" :checked="isSelected(item.id)" @change="toggleOne(item.id)" /></td>
+              <td class="select-cell"><input class="contact-check" type="checkbox" :checked="isSelected(item.id)" @change="toggleOne(item.id)" /></td>
               <td class="company-cell">{{ item.company || item.name }}</td>
               <td>
                 <div class="chip-list">

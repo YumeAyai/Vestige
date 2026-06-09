@@ -518,6 +518,51 @@ td a {
   text-align: center;
 }
 
+.contact-check {
+  appearance: none;
+  background: #fff;
+  border: 1px solid #b9cbc2;
+  border-radius: 5px;
+  box-shadow: inset 0 1px 1px rgba(20, 32, 51, 0.04);
+  cursor: pointer;
+  display: inline-grid;
+  height: 18px;
+  margin: 0;
+  place-items: center;
+  vertical-align: middle;
+  width: 18px;
+}
+
+.contact-check::after {
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  content: "";
+  height: 9px;
+  margin-top: -1px;
+  opacity: 0;
+  transform: rotate(45deg) scale(0.82);
+  width: 5px;
+}
+
+.contact-check:hover {
+  border-color: #4aa987;
+  box-shadow: 0 0 0 3px rgba(58, 147, 111, 0.12);
+}
+
+.contact-check:checked {
+  background: #3a936f;
+  border-color: #3a936f;
+}
+
+.contact-check:checked::after {
+  opacity: 1;
+}
+
+.contact-check:focus-visible {
+  outline: 3px solid rgba(58, 147, 111, 0.22);
+  outline-offset: 2px;
+}
+
 .pager {
   align-items: center;
   border-top: 1px solid #e5eee9;
