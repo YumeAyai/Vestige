@@ -448,30 +448,137 @@ td a {
 .company-cell {
   color: #17233c;
   font-weight: 720;
-  min-width: 240px;
 }
 
 .notes-cell {
   color: #687b72;
-  max-width: 320px;
 }
 
-.email-chip {
-  background: #e6f5ef;
-  border: 1px solid #bfe9d9;
+.excel-table-wrap {
+  border: 1px solid #dfe8e3;
+  border-radius: 8px;
+  max-height: min(560px, calc(100vh - 390px));
+  overflow: auto;
+}
+
+.excel-table-wrap table {
+  border: 0;
+}
+
+.contact-table {
+  min-width: 1520px;
+  table-layout: fixed;
+}
+
+.contact-table th,
+.contact-table td {
+  border-right: 1px solid #e5eee9;
+}
+
+.contact-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+.contact-table th:last-child,
+.contact-table td:last-child {
+  border-right: 0;
+}
+
+.resizable-th {
+  position: relative;
+  user-select: none;
+}
+
+.resizable-th span {
+  display: block;
+  overflow: hidden;
+  padding-right: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resize-handle {
+  background: transparent;
+  border: 0;
+  bottom: 0;
+  cursor: col-resize;
+  min-height: 0;
+  padding: 0;
+  position: absolute;
+  right: -5px;
+  top: 0;
+  width: 10px;
+  z-index: 2;
+}
+
+.resize-handle::after {
+  background: transparent;
+  bottom: 8px;
+  content: "";
+  position: absolute;
+  right: 4px;
+  top: 8px;
+  width: 2px;
+}
+
+.resize-handle:hover {
+  background: rgba(0, 163, 118, 0.08);
+  box-shadow: none;
+}
+
+.resize-handle:hover::after {
+  background: #00a376;
+}
+
+.chip-list {
+  align-items: flex-start;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.data-chip {
+  border: 1px solid transparent;
   border-radius: 999px;
-  color: #007a5a;
   display: inline-flex;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 720;
   line-height: 1.2;
   max-width: 100%;
   overflow-wrap: anywhere;
-  padding: 6px 10px;
+  padding: 6px 9px;
 }
 
-.contact-table {
-  table-layout: auto;
+.data-chip.tone-0 {
+  background: #e6f5ef;
+  border-color: #bfe9d9;
+  color: #007a5a;
+}
+
+.data-chip.tone-1 {
+  background: #eef2ff;
+  border-color: #cdd8ff;
+  color: #3656a6;
+}
+
+.data-chip.tone-2 {
+  background: #fff7e6;
+  border-color: #ffe1a8;
+  color: #9a5b00;
+}
+
+.data-chip.tone-3 {
+  background: #f5edff;
+  border-color: #dfc6ff;
+  color: #6840a3;
+}
+
+.data-chip.tone-4 {
+  background: #e8f7ff;
+  border-color: #bde7ff;
+  color: #146c8f;
 }
 
 .status {
@@ -649,6 +756,14 @@ td a {
   .picker-option {
     min-height: 58px;
     padding: 11px 10px;
+  }
+
+  .excel-table-wrap {
+    max-height: 46vh;
+  }
+
+  .contact-table {
+    min-width: 1180px;
   }
 
   .mobile-title {

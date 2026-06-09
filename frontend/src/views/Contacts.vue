@@ -5,6 +5,15 @@ import { api } from '../services/api'
 const items = ref([])
 const importing = ref(false)
 const form = reactive({ name: '', email: '', company: '', department: '', phone: '', tags: '', notes: '' })
+const columns = reactive([
+  { key: 'company', label: '公司', width: 380, min: 240 },
+  { key: 'email', label: '邮箱', width: 320, min: 220 },
+  { key: 'phone', label: '联系电话', width: 240, min: 180 },
+  { key: 'tags', label: '标签', width: 220, min: 160 },
+  { key: 'notes', label: '备注', width: 360, min: 220 },
+])
+
+let resizeState = null
 
 async function load() {
   items.value = await api.contacts()
@@ -32,6 +41,42 @@ async function upload(event) {
   }
 }
 
+function splitValues(value) {
+  return String(value || '')
+    .split(/[;；]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
+function startResize(event, column) {
+  const pointer = event.touches?.[0] || event
+  resizeState = {
+    column,
+    startX: pointer.clientX,
+    startWidth: column.width,
+  }
+  window.addEventListener('mousemove', resizeColumn)
+  window.addEventListener('mouseup', stopResize)
+  window.addEventListener('touchmove', resizeColumn, { passive: false })
+  window.addEventListener('touchend', stopResize)
+}
+
+function resizeColumn(event) {
+  if (!resizeState) return
+  event.preventDefault?.()
+  const pointer = event.touches?.[0] || event
+  const nextWidth = resizeState.startWidth + pointer.clientX - resizeState.startX
+  resizeState.column.width = Math.max(resizeState.column.min, nextWidth)
+}
+
+function stopResize() {
+  resizeState = null
+  window.removeEventListener('mousemove', resizeColumn)
+  window.removeEventListener('mouseup', stopResize)
+  window.removeEventListener('touchmove', resizeColumn)
+  window.removeEventListener('touchend', stopResize)
+}
+
 onMounted(load)
 </script>
 
@@ -56,18 +101,58 @@ onMounted(load)
       <button>新增联系人</button>
     </form>
     <div class="panel">
-      <table class="contact-table">
-        <thead><tr><th class="col-company">公司</th><th>邮箱</th><th>联系电话</th><th>标签</th><th>备注</th></tr></thead>
-        <tbody>
-          <tr v-for="item in items" :key="item.id">
-            <td class="company-cell">{{ item.company || item.name }}</td>
-            <td><span class="email-chip">{{ item.email }}</span></td>
-            <td>{{ item.phone }}</td>
-            <td>{{ item.tags }}</td>
-            <td class="notes-cell">{{ item.notes }}</td>
-          </tr>
-        </tbody>
-      </table>
+      <div class="excel-table-wrap">
+        <table class="contact-table">
+          <colgroup>
+            <col v-for="column in columns" :key="column.key" :style="{ width: `${column.width}px` }" />
+          </colgroup>
+          <thead>
+            <tr>
+              <th v-for="column in columns" :key="column.key" class="resizable-th">
+                <span>{{ column.label }}</span>
+                <button
+                  class="resize-handle"
+                  type="button"
+                  :aria-label="`调整${column.label}列宽`"
+                  @mousedown="startResize($event, column)"
+                  @touchstart="startResize($event, column)"
+                ></button>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in items" :key="item.id">
+              <td class="company-cell">{{ item.company || item.name }}</td>
+              <td>
+                <div class="chip-list">
+                  <span
+                    v-for="(email, index) in splitValues(item.email)"
+                    :key="email"
+                    class="data-chip"
+                    :class="`tone-${index % 5}`"
+                  >
+                    {{ email }}
+                  </span>
+                </div>
+              </td>
+              <td>
+                <div class="chip-list">
+                  <span
+                    v-for="(phone, index) in splitValues(item.phone)"
+                    :key="phone"
+                    class="data-chip"
+                    :class="`tone-${(index + 2) % 5}`"
+                  >
+                    {{ phone }}
+                  </span>
+                </div>
+              </td>
+              <td>{{ item.tags }}</td>
+              <td class="notes-cell">{{ item.notes }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
   </section>
 </template>

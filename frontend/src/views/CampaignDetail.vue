@@ -140,7 +140,7 @@ onMounted(load)
         <tbody>
           <tr v-for="item in visibleRecipients" :key="item.id">
             <td class="company-cell">{{ item.name }}</td>
-            <td><span class="email-chip">{{ item.email }}</span></td>
+            <td><span class="data-chip tone-0">{{ item.email }}</span></td>
             <td>
               <span class="status" :class="item.send_status">{{ item.send_status }}</span>
             </td>
