@@ -1,9 +1,10 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../services/api'
 
 const router = useRouter()
+const route = useRoute()
 const campaigns = ref([])
 const contacts = ref([])
 const mailboxes = ref([])
@@ -39,6 +40,18 @@ async function load() {
   contacts.value = await api.contacts()
   mailboxes.value = await api.mailboxes()
   templates.value = await api.templates()
+  applyQueryContacts()
+}
+
+function applyQueryContacts() {
+  const raw = String(route.query.contacts || '')
+  if (!raw) return
+  const ids = raw
+    .split(',')
+    .map((item) => Number(item))
+    .filter(Boolean)
+  const available = new Set(contacts.value.map((item) => item.id))
+  form.contact_ids = ids.filter((id) => available.has(id))
 }
 
 function applyTemplate() {

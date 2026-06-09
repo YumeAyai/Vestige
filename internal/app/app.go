@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1033,6 +1034,18 @@ func trackingBaseURL(c *gin.Context) string {
 		return value
 	}
 	return "http://" + c.Request.Host
+}
+
+func queryInt(c *gin.Context, key string, fallback int) int {
+	value := strings.TrimSpace(c.Query(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return fallback
+	}
+	return parsed
 }
 
 func qrcodeTargetURL(baseURL, token string) string {

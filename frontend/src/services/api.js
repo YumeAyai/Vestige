@@ -14,7 +14,10 @@ export const api = {
   createMailbox: (data) => request('/api/mailboxes', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
   deleteMailbox: (id) => request(`/api/mailboxes/${id}`, { method: 'DELETE' }),
   contacts: () => request('/api/contacts'),
+  contactsPage: ({ limit = 20, offset = 0, q = '' } = {}) => request(`/api/contacts/page?limit=${limit}&offset=${offset}&q=${encodeURIComponent(q)}`),
   createContact: (data) => request('/api/contacts', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
+  updateContactsBatch: (data) => request('/api/contacts/batch', { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(data) }),
+  deleteContactsBatch: (ids) => request('/api/contacts/batch', { method: 'DELETE', headers: jsonHeaders, body: JSON.stringify({ ids }) }),
   importContacts: async (file) => {
     const form = new FormData()
     form.append('file', file)
