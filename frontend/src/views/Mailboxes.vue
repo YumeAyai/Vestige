@@ -4,7 +4,9 @@ import { api } from '../services/api'
 
 const items = ref([])
 const saving = ref(false)
+const testing = ref(false)
 const error = ref('')
+const success = ref('')
 const form = reactive({
   name: '企业邮箱',
   host: '',
@@ -15,6 +17,7 @@ const form = reactive({
   from_name: '',
   use_tls: true
 })
+const testToEmail = ref('')
 
 async function load() {
   items.value = await api.mailboxes()
@@ -23,6 +26,7 @@ async function load() {
 async function save() {
   saving.value = true
   error.value = ''
+  success.value = ''
   try {
     await api.createMailbox(form)
     Object.assign(form, {
@@ -40,6 +44,20 @@ async function save() {
     error.value = err.message
   } finally {
     saving.value = false
+  }
+}
+
+async function testMailbox() {
+  testing.value = true
+  error.value = ''
+  success.value = ''
+  try {
+    await api.testMailbox({ ...form, to_email: testToEmail.value })
+    success.value = '测试邮件已发送，请检查收件箱和垃圾邮件。'
+  } catch (err) {
+    error.value = err.message
+  } finally {
+    testing.value = false
   }
 }
 
@@ -66,6 +84,7 @@ onMounted(load)
       </div>
     </div>
     <p v-if="error" class="notice error">{{ error }}</p>
+    <p v-if="success" class="notice success">{{ success }}</p>
     <div class="grid two">
       <form class="panel grid" @submit.prevent="save">
         <label>配置名称<input v-model="form.name" required /></label>
@@ -75,8 +94,14 @@ onMounted(load)
         <label>授权码/密码<input v-model="form.password" type="password" required /></label>
         <label>发件邮箱<input v-model="form.from_email" type="email" required /></label>
         <label>发件人名称<input v-model="form.from_name" required /></label>
-        <label><span><input v-model="form.use_tls" type="checkbox" style="width:auto" /> 使用 TLS</span></label>
-        <button :disabled="saving">保存邮箱</button>
+        <label><span><input v-model="form.use_tls" type="checkbox" style="width:auto" /> 使用 TLS / STARTTLS</span></label>
+        <label>测试收件邮箱<input v-model="testToEmail" type="email" placeholder="默认发送到发件邮箱" /></label>
+        <div class="toolbar">
+          <button :disabled="saving">保存邮箱</button>
+          <button class="secondary" type="button" :disabled="testing" @click="testMailbox">
+            {{ testing ? '测试中' : '发送测试' }}
+          </button>
+        </div>
       </form>
       <div class="panel">
         <h2>已配置邮箱</h2>

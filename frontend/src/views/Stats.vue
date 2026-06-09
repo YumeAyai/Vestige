@@ -49,21 +49,21 @@ function renderChart() {
   const clickedData = stats.value.trend.map(t => t.clicked)
 
   chart.setOption({
-    color: ['#687b72', '#00a376', '#3656a6'],
+    color: ['#98a2b3', '#087f8c', '#3157a4'],
     grid: { left: 36, right: 18, top: 28, bottom: 36 },
     tooltip: { trigger: 'axis' },
-    legend: { top: 0, right: 8, textStyle: { color: '#687b72' } },
+    legend: { top: 0, right: 8, textStyle: { color: '#667085' } },
     xAxis: {
       type: 'category',
       data: dates,
-      axisLine: { lineStyle: { color: '#d8e3dd' } },
-      axisLabel: { color: '#687b72' },
+      axisLine: { lineStyle: { color: '#d9dee8' } },
+      axisLabel: { color: '#667085' },
     },
     yAxis: {
       type: 'value',
       minInterval: 1,
-      splitLine: { lineStyle: { color: '#edf3ef' } },
-      axisLabel: { color: '#687b72' },
+      splitLine: { lineStyle: { color: '#e8ecf2' } },
+      axisLabel: { color: '#667085' },
     },
     series: [
       {
@@ -105,7 +105,7 @@ onMounted(load)
     <div class="page-head">
       <div>
         <h1>追踪统计</h1>
-        <p class="muted">全局邮件追踪数据概览，包含发送、打开、点击和二维码扫描。</p>
+        <p class="muted">全局邮件追踪数据概览，包含发送、打开、点击和图片加载。</p>
       </div>
     </div>
 
@@ -132,7 +132,7 @@ onMounted(load)
       </div>
       <div class="card metric">
         <strong>{{ qrRate }}%</strong>
-        <span>二维码扫描率</span>
+        <span>图片加载率</span>
       </div>
     </div>
 

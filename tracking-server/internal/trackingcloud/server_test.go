@@ -31,6 +31,7 @@ func TestPixelRecordsOpenEventAndReturnsGIF(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/p?s=tenant&c=campaign&rid=token", nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("X-Forwarded-For", "203.0.113.9, 10.0.0.1")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -41,12 +42,15 @@ func TestPixelRecordsOpenEventAndReturnsGIF(t *testing.T) {
 		t.Fatalf("content type = %q", got)
 	}
 
-	var kind, source, campaign, token string
-	if err := conn.QueryRow(`SELECT kind,source,campaign,token FROM tracking_events`).Scan(&kind, &source, &campaign, &token); err != nil {
+	var kind, source, campaign, token, forwardedFor string
+	if err := conn.QueryRow(`SELECT kind,source,campaign,token,forwarded_for FROM tracking_events`).Scan(&kind, &source, &campaign, &token, &forwardedFor); err != nil {
 		t.Fatal(err)
 	}
 	if kind != "open" || source != "tenant" || campaign != "campaign" || token != "token" {
 		t.Fatalf("unexpected event: kind=%s source=%s campaign=%s token=%s", kind, source, campaign, token)
+	}
+	if forwardedFor != "203.0.113.9, 10.0.0.1" {
+		t.Fatalf("unexpected forwarded_for: %q", forwardedFor)
 	}
 }
 
@@ -93,10 +97,10 @@ func TestRedirectRecordsClickAndRedirects(t *testing.T) {
 func TestEventsEndpointFiltersAndUsesCursor(t *testing.T) {
 	router, conn := newTestRouter(t)
 	_, err := conn.Exec(`
-		INSERT INTO tracking_events(source,campaign,token,kind) VALUES
-		('tenant','1','a','open'),
-		('tenant','1','b','click'),
-		('tenant','2','c','open')`)
+		INSERT INTO tracking_events(source,campaign,token,kind,forwarded_for) VALUES
+		('tenant','1','a','open',''),
+		('tenant','1','b','click','198.51.100.8'),
+		('tenant','2','c','open','')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,5 +122,8 @@ func TestEventsEndpointFiltersAndUsesCursor(t *testing.T) {
 	}
 	if body.Events[0].Kind != "click" || body.Events[0].Token != "b" {
 		t.Fatalf("unexpected event: %#v", body.Events[0])
+	}
+	if body.Events[0].ForwardedFor != "198.51.100.8" {
+		t.Fatalf("unexpected forwarded_for: %#v", body.Events[0])
 	}
 }

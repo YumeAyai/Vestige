@@ -35,6 +35,7 @@ type MarkEvent struct {
 	UserAgent      string
 	Referer        string
 	AcceptLanguage string
+	ForwardedFor   string
 	Raw            string
 }
 
@@ -86,7 +87,7 @@ func (r SQLiteRecorder) RecordMark(event MarkEvent) error {
 		source = "local"
 	}
 	_, err := r.db.Exec(
-		`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,referer,accept_language,is_prefetch,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,referer,accept_language,forwarded_for,is_prefetch,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?)`,
 		markID,
 		event.Token,
 		firstNonEmpty(kind, event.Kind),
@@ -95,6 +96,7 @@ func (r SQLiteRecorder) RecordMark(event MarkEvent) error {
 		event.UserAgent,
 		event.Referer,
 		event.AcceptLanguage,
+		event.ForwardedFor,
 		LooksLikePrefetch(event.UserAgent),
 		event.Raw,
 	)
@@ -102,8 +104,15 @@ func (r SQLiteRecorder) RecordMark(event MarkEvent) error {
 }
 
 func PixelURL(baseURL, trackingID string, campaignIDs ...string) string {
+	return PixelURLWithSource(baseURL, "", trackingID, campaignIDs...)
+}
+
+func PixelURLWithSource(baseURL, source, trackingID string, campaignIDs ...string) string {
 	values := url.Values{}
 	values.Set("rid", trackingID)
+	if source != "" {
+		values.Set("s", source)
+	}
 	if len(campaignIDs) > 0 && campaignIDs[0] != "" {
 		values.Set("c", campaignIDs[0])
 	}
@@ -111,7 +120,14 @@ func PixelURL(baseURL, trackingID string, campaignIDs ...string) string {
 }
 
 func RedirectURL(baseURL, campaignID, linkID, trackingID, dest string) string {
+	return RedirectURLWithSource(baseURL, "", campaignID, linkID, trackingID, dest)
+}
+
+func RedirectURLWithSource(baseURL, source, campaignID, linkID, trackingID, dest string) string {
 	values := url.Values{}
+	if source != "" {
+		values.Set("s", source)
+	}
 	values.Set("c", campaignID)
 	values.Set("l", linkID)
 	values.Set("rid", trackingID)
@@ -120,8 +136,15 @@ func RedirectURL(baseURL, campaignID, linkID, trackingID, dest string) string {
 }
 
 func MarkImageURL(baseURL, token string, targets ...string) string {
+	return MarkImageURLWithSource(baseURL, "", token, targets...)
+}
+
+func MarkImageURLWithSource(baseURL, source, token string, targets ...string) string {
 	values := url.Values{}
 	values.Set("token", token)
+	if source != "" {
+		values.Set("s", source)
+	}
 	if len(targets) > 0 && targets[0] != "" {
 		values.Set("target", targets[0])
 	}
@@ -129,24 +152,39 @@ func MarkImageURL(baseURL, token string, targets ...string) string {
 }
 
 func AssetImageURL(baseURL, token, asset string) string {
+	return AssetImageURLWithSource(baseURL, "", token, asset)
+}
+
+func AssetImageURLWithSource(baseURL, source, token, asset string) string {
 	values := url.Values{}
 	values.Set("token", token)
 	values.Set("asset", asset)
+	if source != "" {
+		values.Set("s", source)
+	}
 	return strings.TrimRight(baseURL, "/") + "/qrcode.png?" + values.Encode()
 }
 
 func QRCodeHTML(baseURL, token string, targets ...string) string {
-	return `<img src="` + MarkImageURL(baseURL, token, targets...) + `" width="132" height="132" alt="二维码" style="width:132px;height:132px;border:0" />`
+	return QRCodeHTMLWithSource(baseURL, "", token, targets...)
+}
+
+func QRCodeHTMLWithSource(baseURL, source, token string, targets ...string) string {
+	return `<img src="` + MarkImageURLWithSource(baseURL, source, token, targets...) + `" width="132" height="132" alt="二维码" style="width:132px;height:132px;border:0" />`
 }
 
 func TrackingImageHTML(baseURL, token, asset, alt string, width int) string {
+	return TrackingImageHTMLWithSource(baseURL, "", token, asset, alt, width)
+}
+
+func TrackingImageHTMLWithSource(baseURL, source, token, asset, alt string, width int) string {
 	if width <= 0 {
 		width = 176
 	}
 	if alt == "" {
 		alt = "联系二维码"
 	}
-	return `<img src="` + AssetImageURL(baseURL, token, asset) + `" width="` + intString(width) + `" alt="` + templateEscape(alt) + `" style="width:` + intString(width) + `px;height:auto;border:0;display:block" />`
+	return `<img src="` + AssetImageURLWithSource(baseURL, source, token, asset) + `" width="` + intString(width) + `" alt="` + templateEscape(alt) + `" style="width:` + intString(width) + `px;height:auto;border:0;display:block" />`
 }
 
 func QRCodePNG(target string, size int) ([]byte, error) {
@@ -157,7 +195,11 @@ func QRCodePNG(target string, size int) ([]byte, error) {
 }
 
 func InjectPixel(body, baseURL, trackingID string, campaignIDs ...string) string {
-	pixel := `<img src="` + PixelURL(baseURL, trackingID, campaignIDs...) + `" width="1" height="1" alt="" style="display:none;width:1px;height:1px;border:0" />`
+	return InjectPixelWithSource(body, baseURL, "", trackingID, campaignIDs...)
+}
+
+func InjectPixelWithSource(body, baseURL, source, trackingID string, campaignIDs ...string) string {
+	pixel := `<img src="` + PixelURLWithSource(baseURL, source, trackingID, campaignIDs...) + `" width="1" height="1" alt="" style="display:none;width:1px;height:1px;border:0" />`
 	if strings.Contains(strings.ToLower(body), "</body>") {
 		return strings.Replace(body, "</body>", pixel+"</body>", 1)
 	}

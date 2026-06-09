@@ -38,6 +38,26 @@ func TestTrackingURLsTrimBaseAndEncodeQuery(t *testing.T) {
 	}
 }
 
+func TestTrackingURLsIncludeSourceToken(t *testing.T) {
+	pixel := PixelURLWithSource("https://track.example.com", "creator-1", "rid", "campaign")
+	parsed, err := url.Parse(pixel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parsed.Query().Get("s"); got != "creator-1" {
+		t.Fatalf("unexpected pixel source: %q", got)
+	}
+
+	image := AssetImageURLWithSource("https://track.example.com", "creator-1", "mark", "qr.png")
+	parsed, err = url.Parse(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parsed.Query().Get("s"); got != "creator-1" {
+		t.Fatalf("unexpected image source: %q", got)
+	}
+}
+
 func TestInjectPixelPlacesImageBeforeBodyClose(t *testing.T) {
 	body := "<html><body><p>Hello</p></body></html>"
 	got := InjectPixel(body, "https://track.example.com", "rid", "campaign")

@@ -36,7 +36,7 @@ func TestMigrateCreatesCoreTablesAndIsIdempotent(t *testing.T) {
 		}
 	}
 
-	for _, table := range []string{"mailboxes", "contacts", "campaigns", "campaign_recipients", "tracking_marks", "tracking_mark_events"} {
+	for _, table := range []string{"mailboxes", "contacts", "campaigns", "campaign_recipients", "tracking_marks", "tracking_mark_events", "tracking_cloud_sync_state", "app_settings"} {
 		t.Run(table, func(t *testing.T) {
 			var name string
 			err := conn.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)

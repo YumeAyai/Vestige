@@ -16,7 +16,7 @@ const form = reactive({
   name: '企业微信推广联系',
   subject: '{{.Company}} 您好，添加企业微信获取合作资料',
   body_html:
-    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f8f6;padding:24px 0"><tr><td align="center"><table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border:1px solid #e2ebe6"><tr><td style="padding:28px;font-family:Arial,Helvetica,sans-serif;color:#17233c"><h1 style="font-size:22px;margin:0 0 14px">企业微信联系</h1><p>{{.Name}} 您好：</p><p>我们整理了一份适合 {{.Company}} 的合作资料，欢迎添加企业微信进一步沟通。</p><p style="margin:20px 0;color:#607269">上传企业微信二维码后，这里会插入埋点图片。</p><p style="color:#607269;font-size:13px">联系二维码图片由服务端返回；邮件客户端加载图片时会记录设备、IP、User-Agent、语言和 Referer。</p><p>期待交流。</p></td></tr></table></td></tr></table>',
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f8f6;padding:24px 0"><tr><td align="center"><table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border:1px solid #e2ebe6"><tr><td style="padding:28px;font-family:Arial,Helvetica,sans-serif;color:#17233c"><h1 style="font-size:22px;margin:0 0 14px">企业微信联系</h1><p>{{.Name}} 您好：</p><p>我们整理了一份适合 {{.Company}} 的合作资料，欢迎添加企业微信进一步沟通。</p><p style="margin:20px 0;color:#607269">上传图片后，这里会插入图片埋点。</p><p style="color:#607269;font-size:13px">图片埋点由服务端返回；邮件客户端加载图片时会记录设备、IP、User-Agent 和 Referer。</p><p>期待交流。</p></td></tr></table></td></tr></table>',
 })
 const sample = reactive({
   name: '上海示例企业有限公司',
@@ -28,7 +28,7 @@ const sample = reactive({
   notes: ''
 })
 const imageForm = reactive({
-  label: '企业微信二维码',
+  label: '企业微信图片',
   width: 176
 })
 
@@ -40,6 +40,7 @@ const collectFields = [
   '浏览器',
   '语言',
   'Referer',
+  'X-Forwarded-For',
   '请求时间',
   '预加载判断'
 ]
@@ -77,7 +78,7 @@ function newTemplate() {
     name: '企业微信推广联系',
     subject: '{{.Company}} 您好，添加企业微信获取合作资料',
     body_html:
-      '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f8f6;padding:24px 0"><tr><td align="center"><table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border:1px solid #e2ebe6"><tr><td style="padding:28px;font-family:Arial,Helvetica,sans-serif;color:#17233c"><h1 style="font-size:22px;margin:0 0 14px">企业微信联系</h1><p>{{.Name}} 您好：</p><p>我们整理了一份适合 {{.Company}} 的合作资料，欢迎添加企业微信进一步沟通。</p><p style="margin:20px 0;color:#607269">上传企业微信二维码后，这里会插入埋点图片。</p><p style="color:#607269;font-size:13px">联系二维码图片由服务端返回；邮件客户端加载图片时会记录设备、IP、User-Agent、语言和 Referer。</p><p>期待交流。</p></td></tr></table></td></tr></table>'
+      '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f8f6;padding:24px 0"><tr><td align="center"><table role="presentation" width="640" cellpadding="0" cellspacing="0" style="max-width:640px;background:#ffffff;border:1px solid #e2ebe6"><tr><td style="padding:28px;font-family:Arial,Helvetica,sans-serif;color:#17233c"><h1 style="font-size:22px;margin:0 0 14px">企业微信联系</h1><p>{{.Name}} 您好：</p><p>我们整理了一份适合 {{.Company}} 的合作资料，欢迎添加企业微信进一步沟通。</p><p style="margin:20px 0;color:#607269">上传图片后，这里会插入图片埋点。</p><p style="color:#607269;font-size:13px">图片埋点由服务端返回；邮件客户端加载图片时会记录设备、IP、User-Agent 和 Referer。</p><p>期待交流。</p></td></tr></table></td></tr></table>'
   })
   saveMessage.value = ''
 }
@@ -169,7 +170,7 @@ function selectTrackingImage(event) {
 
 async function uploadTrackingImageAsset() {
   if (!imageFile.value) {
-    imageError.value = '请先选择企业微信二维码图片。'
+    imageError.value = '请先选择埋点图片。'
     return
   }
   imageLoading.value = true
@@ -186,7 +187,7 @@ async function uploadTrackingImageAsset() {
 
 function insertTrackingImagePlaceholder() {
   if (!imageAsset.value?.placeholder) {
-    imageError.value = '请先上传企业微信二维码图片，再插入埋点位置。'
+    imageError.value = '请先上传埋点图片，再插入埋点位置。'
     return
   }
   insertAtCursor(imageAsset.value.placeholder)
@@ -241,11 +242,11 @@ onMounted(renderPreview)
         <div class="qr-tool">
           <div>
             <h2>联系图片埋点资源</h2>
-            <p class="muted">上传企业微信二维码图片，服务端返回可插入到邮件里的图片位置；正式发送时每个收件人会获得独立 token。</p>
+            <p class="muted">上传需要追踪加载的图片，服务端返回可插入到邮件里的图片埋点；正式发送时每个收件人会获得独立 token。</p>
           </div>
           <div class="qr-tool-grid">
-            <label>二维码模板名称<input v-model="imageForm.label" placeholder="例如：企业微信二维码 A" /></label>
-            <label>企业微信二维码图片<input type="file" accept="image/png,image/jpeg,image/gif,image/webp" @change="selectTrackingImage" /></label>
+            <label>图片埋点名称<input v-model="imageForm.label" placeholder="例如：企业微信图片 A" /></label>
+            <label>埋点图片<input type="file" accept="image/png,image/jpeg,image/gif,image/webp" @change="selectTrackingImage" /></label>
             <label>显示宽度
               <select v-model.number="imageForm.width">
                 <option :value="132">132 px</option>
@@ -259,7 +260,7 @@ onMounted(renderPreview)
           </div>
           <p v-if="imageError" class="notice error">{{ imageError }}</p>
           <div v-if="imageAsset" class="qr-asset-result">
-            <img :src="imageAsset.image_url" alt="企业微信二维码预览" />
+            <img :src="imageAsset.image_url" alt="图片埋点预览" />
             <div>
               <strong>{{ imageAsset.label }}</strong>
               <code>{{ imageAsset.placeholder }}</code>
@@ -276,7 +277,7 @@ onMounted(renderPreview)
         <div class="preview-head">
           <div>
             <h2>实时预览</h2>
-            <p class="muted">使用示例联系人渲染变量和二维码。</p>
+            <p class="muted">使用示例联系人渲染变量和图片埋点。</p>
           </div>
         </div>
         <div class="preview-sample">

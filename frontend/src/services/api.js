@@ -6,12 +6,16 @@ async function request(path, options = {}) {
     const data = await res.json().catch(() => ({ error: res.statusText }))
     throw new Error(data.error || res.statusText)
   }
-  return res.json()
+  if (res.status === 204) return null
+  const text = await res.text()
+  if (!text) return null
+  return JSON.parse(text)
 }
 
 export const api = {
   mailboxes: () => request('/api/mailboxes'),
   createMailbox: (data) => request('/api/mailboxes', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
+  testMailbox: (data) => request('/api/mailboxes/test', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
   deleteMailbox: (id) => request(`/api/mailboxes/${id}`, { method: 'DELETE' }),
   contacts: () => request('/api/contacts'),
   contactsPage: ({ limit = 20, offset = 0, q = '' } = {}) => request(`/api/contacts/page?limit=${limit}&offset=${offset}&q=${encodeURIComponent(q)}`),

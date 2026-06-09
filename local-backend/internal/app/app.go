@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/csv"
 	"encoding/json"
@@ -12,10 +13,12 @@ import (
 	"mime"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"nousmail/local-backend/internal/mailer"
@@ -28,9 +31,13 @@ import (
 )
 
 type Server struct {
-	db       *sql.DB
-	frontend fs.FS
+	db               *sql.DB
+	frontend         fs.FS
+	sendingCampaigns sync.Map
+	cloudSyncMu      sync.Mutex
 }
+
+var cloudHTTPClient = &http.Client{Timeout: 2500 * time.Millisecond}
 
 func New(db *sql.DB, frontend fs.FS) *gin.Engine {
 	s := &Server{db: db, frontend: frontend}
@@ -42,6 +49,7 @@ func New(db *sql.DB, frontend fs.FS) *gin.Engine {
 
 	api.GET("/mailboxes", s.listMailboxes)
 	api.POST("/mailboxes", s.createMailbox)
+	api.POST("/mailboxes/test", s.testMailbox)
 	api.DELETE("/mailboxes/:id", s.deleteMailbox)
 	api.GET("/contacts", s.listContacts)
 	api.GET("/contacts/page", s.pageContacts)
@@ -71,6 +79,7 @@ func New(db *sql.DB, frontend fs.FS) *gin.Engine {
 	api.GET("/campaigns/:id/links/:lid/stats", s.linkStats)
 	api.GET("/stats", s.globalStats)
 	api.POST("/tracking/cloud-events/import", s.importCloudTrackingEvents)
+	api.POST("/tracking/cloud-events/sync", s.syncCloudTrackingEventsHandler)
 
 	dist, err := fs.Sub(frontend, "dist")
 	if err == nil {
@@ -116,6 +125,10 @@ func (s *Server) createMailbox(c *gin.Context) {
 	if bind(c, &input) != nil {
 		return
 	}
+	if err := mailer.ValidateMailbox(input); err != nil {
+		fail(c, err)
+		return
+	}
 	res, err := s.db.Exec(`INSERT INTO mailboxes(name,host,port,username,password,from_email,from_name,use_tls) VALUES(?,?,?,?,?,?,?,?)`,
 		input.Name, input.Host, input.Port, input.Username, input.Password, input.FromEmail, input.FromName, input.UseTLS)
 	if err != nil {
@@ -125,6 +138,23 @@ func (s *Server) createMailbox(c *gin.Context) {
 	input.ID, _ = res.LastInsertId()
 	input.Password = ""
 	c.JSON(http.StatusCreated, input)
+}
+
+type testMailboxInput struct {
+	models.Mailbox
+	ToEmail string `json:"to_email"`
+}
+
+func (s *Server) testMailbox(c *gin.Context) {
+	var input testMailboxInput
+	if bind(c, &input) != nil {
+		return
+	}
+	if err := mailer.Test(input.Mailbox, input.ToEmail); err != nil {
+		fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func (s *Server) deleteMailbox(c *gin.Context) {
@@ -542,6 +572,7 @@ func (s *Server) trackingImage(c *gin.Context) {
 			UserAgent:      c.GetHeader("User-Agent"),
 			Referer:        c.GetHeader("Referer"),
 			AcceptLanguage: c.GetHeader("Accept-Language"),
+			ForwardedFor:   c.GetHeader("X-Forwarded-For"),
 			Raw:            string(raw),
 		})
 	}
@@ -662,44 +693,97 @@ func (s *Server) getCampaign(c *gin.Context) {
 
 func (s *Server) sendCampaign(c *gin.Context) {
 	id := c.Param("id")
-	var campaign models.Campaign
-	if err := s.db.QueryRow(`SELECT id,name,subject,body_html,mailbox_id,status,tracking_enabled,created_at,COALESCE(sent_at,'') FROM campaigns WHERE id=?`, id).
-		Scan(&campaign.ID, &campaign.Name, &campaign.Subject, &campaign.BodyHTML, &campaign.MailboxID, &campaign.Status, &campaign.TrackingEnabled, &campaign.CreatedAt, &campaign.SentAt); err != nil {
+	campaignID, err := strconv.ParseInt(id, 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid campaign id"})
+		return
+	}
+	var exists int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM campaigns WHERE id=?`, campaignID).Scan(&exists); err != nil {
 		fail(c, err)
+		return
+	}
+	if exists == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	if _, loaded := s.sendingCampaigns.LoadOrStore(campaignID, struct{}{}); loaded {
+		c.Status(http.StatusAccepted)
+		return
+	}
+	baseURL := trackingBaseURL(c)
+	sourceToken := s.trackingSourceToken()
+	_, _ = s.db.Exec(`UPDATE campaigns SET status='sending' WHERE id=?`, campaignID)
+	go s.runCampaignSend(campaignID, baseURL, sourceToken)
+	c.Status(http.StatusAccepted)
+}
+
+func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) {
+	defer s.sendingCampaigns.Delete(campaignID)
+	var campaign models.Campaign
+	if err := s.db.QueryRow(`SELECT id,name,subject,body_html,mailbox_id,status,tracking_enabled,created_at,COALESCE(sent_at,'') FROM campaigns WHERE id=?`, campaignID).
+		Scan(&campaign.ID, &campaign.Name, &campaign.Subject, &campaign.BodyHTML, &campaign.MailboxID, &campaign.Status, &campaign.TrackingEnabled, &campaign.CreatedAt, &campaign.SentAt); err != nil {
 		return
 	}
 	var mb models.Mailbox
 	if err := s.db.QueryRow(`SELECT id,name,host,port,username,password,from_email,from_name,use_tls FROM mailboxes WHERE id=?`, campaign.MailboxID).
 		Scan(&mb.ID, &mb.Name, &mb.Host, &mb.Port, &mb.Username, &mb.Password, &mb.FromEmail, &mb.FromName, &mb.UseTLS); err != nil {
-		fail(c, err)
+		_, _ = s.db.Exec(`UPDATE campaigns SET status='partial_failed' WHERE id=?`, campaignID)
 		return
 	}
-	baseURL := trackingBaseURL(c)
-	rows, err := s.db.Query(`SELECT cr.id,cr.contact_id,cr.email,cr.name,cr.tracking_id,c.company,c.department,c.phone,c.tags,c.notes FROM campaign_recipients cr JOIN contacts c ON c.id=cr.contact_id WHERE cr.campaign_id=? AND cr.send_status IN ('pending','failed')`, id)
+	variants, err := s.prepareCampaignVariants(campaignID)
 	if err != nil {
-		fail(c, err)
+		_, _ = s.db.Exec(`UPDATE campaigns SET status='partial_failed' WHERE id=?`, campaignID)
 		return
 	}
-	defer rows.Close()
-	sent, failed := 0, 0
+	rows, err := s.db.Query(`SELECT cr.id,cr.contact_id,cr.email,cr.name,cr.tracking_id,COALESCE(cr.variant_id,0),c.company,c.department,c.phone,c.tags,c.notes FROM campaign_recipients cr JOIN contacts c ON c.id=cr.contact_id WHERE cr.campaign_id=? AND cr.send_status IN ('pending','failed')`, campaignID)
+	if err != nil {
+		_, _ = s.db.Exec(`UPDATE campaigns SET status='partial_failed' WHERE id=?`, campaignID)
+		return
+	}
+	type sendTarget struct {
+		recipient models.Recipient
+		contact   models.Contact
+		variant   campaignVariant
+	}
+	targets := []sendTarget{}
 	for rows.Next() {
 		var rec models.Recipient
 		var contact models.Contact
-		if err := rows.Scan(&rec.ID, &rec.ContactID, &rec.Email, &rec.Name, &rec.TrackingID, &contact.Company, &contact.Department, &contact.Phone, &contact.Tags, &contact.Notes); err != nil {
-			fail(c, err)
+		var variantID int64
+		if err := rows.Scan(&rec.ID, &rec.ContactID, &rec.Email, &rec.Name, &rec.TrackingID, &variantID, &contact.Company, &contact.Department, &contact.Phone, &contact.Tags, &contact.Notes); err != nil {
+			_ = rows.Close()
+			_, _ = s.db.Exec(`UPDATE campaigns SET status='partial_failed' WHERE id=?`, campaignID)
 			return
 		}
 		contact.ID, contact.Name, contact.Email = rec.ContactID, rec.Name, rec.Email
+		targets = append(targets, sendTarget{recipient: rec, contact: contact, variant: variants[variantID]})
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		_, _ = s.db.Exec(`UPDATE campaigns SET status='partial_failed' WHERE id=?`, campaignID)
+		return
+	}
+	if err := rows.Close(); err != nil {
+		_, _ = s.db.Exec(`UPDATE campaigns SET status='partial_failed' WHERE id=?`, campaignID)
+		return
+	}
+	failed := 0
+	for _, target := range targets {
+		rec := target.recipient
+		contact := target.contact
+		subjectTemplate := firstNonEmpty(target.variant.Subject, campaign.Subject)
+		bodyTemplate := firstNonEmpty(target.variant.BodyHTML, campaign.BodyHTML)
 		qrHTML := template.HTML("")
 		var markToken string
-		if templateUsesQRCode(campaign.BodyHTML) || templateUsesTrackingImage(campaign.BodyHTML) {
+		if templateUsesQRCode(bodyTemplate) || templateUsesTrackingImage(bodyTemplate) {
 			markToken, err = s.ensureTrackingMark(rec.ID, "qrcode", "联系二维码", "")
 			if err != nil {
 				_, _ = s.db.Exec(`UPDATE campaign_recipients SET send_status='failed',failure_reason=? WHERE id=?`, err.Error(), rec.ID)
 				failed++
 				continue
 			}
-			qrHTML = template.HTML(tracker.QRCodeHTML(baseURL, markToken))
+			qrHTML = template.HTML(tracker.QRCodeHTMLWithSource(baseURL, sourceToken, markToken))
 		}
 		data := mailer.Personalization{
 			BaseURL:   baseURL,
@@ -708,18 +792,18 @@ func (s *Server) sendCampaign(c *gin.Context) {
 			Campaign:  campaign,
 			QRCode:    qrHTML,
 			TrackingImage: func(asset string) template.HTML {
-				return template.HTML(tracker.TrackingImageHTML(baseURL, markToken, asset, "企业微信二维码", 176))
+				return template.HTML(tracker.TrackingImageHTMLWithSource(baseURL, sourceToken, markToken, asset, "企业微信二维码", 176))
 			},
 		}
-		subject, err := mailer.RenderBody(campaign.Subject, data)
+		subject, err := mailer.RenderBody(subjectTemplate, data)
 		if err != nil {
 			_, _ = s.db.Exec(`UPDATE campaign_recipients SET send_status='failed',failure_reason=? WHERE id=?`, err.Error(), rec.ID)
 			failed++
 			continue
 		}
-		body, err := mailer.RenderBody(campaign.BodyHTML, data)
+		body, err := mailer.RenderBody(bodyTemplate, data)
 		if err == nil && campaign.TrackingEnabled {
-			body = tracker.InjectPixel(body, baseURL, rec.TrackingID, strconv.FormatInt(campaign.ID, 10))
+			body = tracker.InjectPixelWithSource(body, baseURL, sourceToken, rec.TrackingID, strconv.FormatInt(campaign.ID, 10))
 		}
 		if err == nil {
 			err = sendMailWithTimeout(mb, rec.Email, rec.Name, subject, body, 20*time.Second)
@@ -729,7 +813,6 @@ func (s *Server) sendCampaign(c *gin.Context) {
 			_, _ = s.db.Exec(`UPDATE campaign_recipients SET send_status='failed',failure_reason=? WHERE id=?`, err.Error(), rec.ID)
 			continue
 		}
-		sent++
 		_, _ = s.db.Exec(`UPDATE campaign_recipients SET send_status='sent',failure_reason='',sent_at=CURRENT_TIMESTAMP WHERE id=?`, rec.ID)
 		time.Sleep(300 * time.Millisecond)
 	}
@@ -737,11 +820,92 @@ func (s *Server) sendCampaign(c *gin.Context) {
 	if failed > 0 {
 		status = "partial_failed"
 	}
-	_, _ = s.db.Exec(`UPDATE campaigns SET status=?,sent_at=COALESCE(sent_at,CURRENT_TIMESTAMP) WHERE id=?`, status, id)
-	c.JSON(http.StatusOK, gin.H{"sent": sent, "failed": failed})
+	_, _ = s.db.Exec(`UPDATE campaigns SET status=?,sent_at=COALESCE(sent_at,CURRENT_TIMESTAMP) WHERE id=?`, status, campaignID)
+}
+
+type campaignVariant struct {
+	ID       int64
+	Name     string
+	Subject  string
+	BodyHTML string
+	Weight   int
+}
+
+func (s *Server) prepareCampaignVariants(campaignID int64) (map[int64]campaignVariant, error) {
+	rows, err := s.db.Query(`SELECT id,name,subject,body_html,weight FROM campaign_variants WHERE campaign_id=? ORDER BY id`, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	variants := []campaignVariant{}
+	byID := map[int64]campaignVariant{}
+	for rows.Next() {
+		var variant campaignVariant
+		if err := rows.Scan(&variant.ID, &variant.Name, &variant.Subject, &variant.BodyHTML, &variant.Weight); err != nil {
+			return nil, err
+		}
+		if variant.Weight <= 0 {
+			variant.Weight = 1
+		}
+		variants = append(variants, variant)
+		byID[variant.ID] = variant
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(variants) == 0 {
+		return byID, nil
+	}
+
+	recRows, err := s.db.Query(`SELECT id FROM campaign_recipients WHERE campaign_id=? AND variant_id IS NULL AND send_status IN ('pending','failed') ORDER BY id`, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	recipientIDs := []int64{}
+	for recRows.Next() {
+		var id int64
+		if err := recRows.Scan(&id); err != nil {
+			_ = recRows.Close()
+			return nil, err
+		}
+		recipientIDs = append(recipientIDs, id)
+	}
+	if err := recRows.Err(); err != nil {
+		_ = recRows.Close()
+		return nil, err
+	}
+	if err := recRows.Close(); err != nil {
+		return nil, err
+	}
+	for index, recipientID := range recipientIDs {
+		variant := weightedVariant(variants, index)
+		if _, err := s.db.Exec(`UPDATE campaign_recipients SET variant_id=? WHERE id=?`, variant.ID, recipientID); err != nil {
+			return nil, err
+		}
+	}
+	return byID, nil
+}
+
+func weightedVariant(variants []campaignVariant, index int) campaignVariant {
+	total := 0
+	for _, variant := range variants {
+		total += variant.Weight
+	}
+	if total <= 0 {
+		return variants[index%len(variants)]
+	}
+	slot := index % total
+	for _, variant := range variants {
+		if slot < variant.Weight {
+			return variant
+		}
+		slot -= variant.Weight
+	}
+	return variants[len(variants)-1]
 }
 
 func (s *Server) campaignStats(c *gin.Context) {
+	s.syncCloudTrackingEventsBestEffort(c)
 	id := c.Param("id")
 	var stats struct {
 		Total          int `json:"total"`
@@ -753,6 +917,8 @@ func (s *Server) campaignStats(c *gin.Context) {
 		QRLoadEvents   int `json:"qr_load_events"`
 		QRNotLoaded    int `json:"qr_not_loaded"`
 		PrefetchEvents int `json:"prefetch_events"`
+		Clicked        int `json:"clicked"`
+		ClickEvents    int `json:"click_events"`
 	}
 	_ = s.db.QueryRow(`
 		SELECT
@@ -764,21 +930,29 @@ func (s *Server) campaignStats(c *gin.Context) {
 			COALESCE(SUM(qr_load_count>0),0),
 			COALESCE(SUM(qr_load_count),0),
 			COALESCE(SUM(qr_load_count=0),0),
-			COALESCE(SUM(prefetch_count),0)
+			COALESCE(SUM(prefetch_count),0),
+			COALESCE(SUM(click_count>0),0),
+			COALESCE(SUM(click_count),0)
 		FROM (
 			SELECT
 				cr.id,
 				cr.send_status,
 				cr.open_count,
 				COUNT(tme.id) qr_load_count,
-				COALESCE(SUM(tme.is_prefetch),0) prefetch_count
+				COALESCE(SUM(tme.is_prefetch),0) prefetch_count,
+				(
+					SELECT COUNT(*)
+					FROM tracking_mark_events click_events
+					JOIN tracking_marks click_marks ON click_marks.id=click_events.mark_id
+					WHERE click_marks.campaign_recipient_id=cr.id AND click_events.kind='click'
+				) click_count
 			FROM campaign_recipients cr
 			LEFT JOIN tracking_marks tm ON tm.campaign_recipient_id=cr.id AND tm.kind='qrcode'
 			LEFT JOIN tracking_mark_events tme ON tme.mark_id=tm.id AND tme.kind='qrcode'
 			WHERE cr.campaign_id=?
 			GROUP BY cr.id
 		)`, id).
-		Scan(&stats.Total, &stats.Sent, &stats.Failed, &stats.Opened, &stats.Unopened, &stats.QRLoaded, &stats.QRLoadEvents, &stats.QRNotLoaded, &stats.PrefetchEvents)
+		Scan(&stats.Total, &stats.Sent, &stats.Failed, &stats.Opened, &stats.Unopened, &stats.QRLoaded, &stats.QRLoadEvents, &stats.QRNotLoaded, &stats.PrefetchEvents, &stats.Clicked, &stats.ClickEvents)
 
 	rows, _ := s.db.Query(`SELECT strftime('%Y-%m-%d %H:00', opened_at) hour, COUNT(*) FROM open_events oe JOIN campaign_recipients cr ON cr.id=oe.campaign_recipient_id WHERE cr.campaign_id=? GROUP BY hour ORDER BY hour`, id)
 	defer closeRows(rows)
@@ -806,6 +980,7 @@ func (s *Server) campaignStats(c *gin.Context) {
 }
 
 func (s *Server) listRecipients(c *gin.Context) {
+	s.syncCloudTrackingEventsBestEffort(c)
 	rows, err := s.db.Query(`
 		SELECT
 			cr.id,
@@ -842,7 +1017,57 @@ func (s *Server) listRecipients(c *gin.Context) {
 					LIMIT 1
 				),
 				''
-			) last_qr_user_agent
+			) last_qr_user_agent,
+			COALESCE(
+				(
+					SELECT latest.forwarded_for
+					FROM tracking_mark_events latest
+					WHERE latest.mark_id=tm.id AND latest.kind='qrcode'
+					ORDER BY latest.triggered_at DESC, latest.id DESC
+					LIMIT 1
+				),
+				''
+			) last_qr_forwarded_for,
+			COALESCE(
+				(
+					SELECT latest.source
+					FROM tracking_mark_events latest
+					WHERE latest.mark_id=tm.id AND latest.kind='qrcode'
+					ORDER BY latest.triggered_at DESC, latest.id DESC
+					LIMIT 1
+				),
+				''
+			) last_qr_source,
+			COALESCE(
+				(
+					SELECT latest.referer
+					FROM tracking_mark_events latest
+					WHERE latest.mark_id=tm.id AND latest.kind='qrcode'
+					ORDER BY latest.triggered_at DESC, latest.id DESC
+					LIMIT 1
+				),
+				''
+			) last_qr_referer,
+			COALESCE(
+				(
+					SELECT latest.accept_language
+					FROM tracking_mark_events latest
+					WHERE latest.mark_id=tm.id AND latest.kind='qrcode'
+					ORDER BY latest.triggered_at DESC, latest.id DESC
+					LIMIT 1
+				),
+				''
+			) last_qr_accept_language,
+			COALESCE(
+				(
+					SELECT latest.is_prefetch
+					FROM tracking_mark_events latest
+					WHERE latest.mark_id=tm.id AND latest.kind='qrcode'
+					ORDER BY latest.triggered_at DESC, latest.id DESC
+					LIMIT 1
+				),
+				0
+			) last_qr_is_prefetch
 		FROM campaign_recipients cr
 		LEFT JOIN tracking_marks tm ON tm.campaign_recipient_id=cr.id AND tm.kind='qrcode'
 		LEFT JOIN tracking_mark_events tme ON tme.mark_id=tm.id AND tme.kind='qrcode'
@@ -857,7 +1082,7 @@ func (s *Server) listRecipients(c *gin.Context) {
 	items := []models.Recipient{}
 	for rows.Next() {
 		var item models.Recipient
-		if err := rows.Scan(&item.ID, &item.CampaignID, &item.ContactID, &item.Email, &item.Name, &item.TrackingID, &item.SendStatus, &item.FailureReason, &item.SentAt, &item.FirstOpenedAt, &item.LastOpenedAt, &item.OpenCount, &item.QRLoadCount, &item.FirstQRLoadAt, &item.LastQRLoadAt, &item.LastQRIP, &item.LastQRUA); err != nil {
+		if err := rows.Scan(&item.ID, &item.CampaignID, &item.ContactID, &item.Email, &item.Name, &item.TrackingID, &item.SendStatus, &item.FailureReason, &item.SentAt, &item.FirstOpenedAt, &item.LastOpenedAt, &item.OpenCount, &item.QRLoadCount, &item.FirstQRLoadAt, &item.LastQRLoadAt, &item.LastQRIP, &item.LastQRUA, &item.LastQRXFF, &item.LastQRSource, &item.LastQRReferer, &item.LastQRLang, &item.LastQRPrefetch); err != nil {
 			fail(c, err)
 			return
 		}
@@ -868,6 +1093,9 @@ func (s *Server) listRecipients(c *gin.Context) {
 
 type cloudTrackingEventInput struct {
 	ID             int64  `json:"id"`
+	Source         string `json:"source"`
+	Campaign       string `json:"campaign"`
+	Link           string `json:"link"`
 	Token          string `json:"token"`
 	Kind           string `json:"kind"`
 	TriggeredAt    string `json:"triggered_at"`
@@ -875,6 +1103,7 @@ type cloudTrackingEventInput struct {
 	UserAgent      string `json:"user_agent"`
 	Referer        string `json:"referer"`
 	AcceptLanguage string `json:"accept_language"`
+	ForwardedFor   string `json:"forwarded_for"`
 }
 
 type importCloudTrackingEventsInput struct {
@@ -887,6 +1116,7 @@ func (s *Server) importCloudTrackingEvents(c *gin.Context) {
 		return
 	}
 	imported := 0
+	skipped := 0
 	for _, event := range input.Events {
 		if strings.TrimSpace(event.Token) == "" {
 			continue
@@ -894,12 +1124,144 @@ func (s *Server) importCloudTrackingEvents(c *gin.Context) {
 		raw, _ := json.Marshal(event)
 		err := s.recordCloudTrackingEvent(event, string(raw))
 		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				skipped++
+				continue
+			}
 			fail(c, err)
 			return
 		}
 		imported++
 	}
-	c.JSON(http.StatusOK, gin.H{"imported": imported})
+	c.JSON(http.StatusOK, gin.H{"imported": imported, "skipped": skipped})
+}
+
+func (s *Server) syncCloudTrackingEventsHandler(c *gin.Context) {
+	result, err := s.syncCloudTrackingEvents(c.Request.Context(), trackingBaseURL(c), s.trackingSourceToken())
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+type cloudTrackingSyncResult struct {
+	Fetched     int   `json:"fetched"`
+	Imported    int   `json:"imported"`
+	Skipped     int   `json:"skipped"`
+	LastEventID int64 `json:"last_event_id"`
+}
+
+type cloudTrackingEventsResponse struct {
+	Events []cloudTrackingEventInput `json:"events"`
+}
+
+func (s *Server) syncCloudTrackingEvents(ctx context.Context, baseURL, sourceToken string) (cloudTrackingSyncResult, error) {
+	s.cloudSyncMu.Lock()
+	defer s.cloudSyncMu.Unlock()
+
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if baseURL == "" {
+		return cloudTrackingSyncResult{}, nil
+	}
+
+	source := baseURL + "|" + sourceToken
+	var lastID int64
+	err := s.db.QueryRow(`SELECT last_event_id FROM tracking_cloud_sync_state WHERE source=?`, source).Scan(&lastID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return cloudTrackingSyncResult{}, err
+	}
+
+	result := cloudTrackingSyncResult{LastEventID: lastID}
+	const limit = 1000
+	for page := 0; page < 10; page++ {
+		endpoint, err := cloudEventsURL(baseURL, sourceToken, lastID, limit)
+		if err != nil {
+			return result, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return result, err
+		}
+		res, err := cloudHTTPClient.Do(req)
+		if err != nil {
+			return result, err
+		}
+		var payload cloudTrackingEventsResponse
+		decodeErr := json.NewDecoder(res.Body).Decode(&payload)
+		closeErr := res.Body.Close()
+		if decodeErr != nil {
+			return result, decodeErr
+		}
+		if closeErr != nil {
+			return result, closeErr
+		}
+		if res.StatusCode < 200 || res.StatusCode >= 300 {
+			return result, errors.New(res.Status)
+		}
+		if len(payload.Events) == 0 {
+			break
+		}
+		for _, event := range payload.Events {
+			if event.ID > lastID {
+				lastID = event.ID
+			}
+			result.Fetched++
+			if strings.TrimSpace(event.Token) == "" {
+				result.Skipped++
+				continue
+			}
+			raw, _ := json.Marshal(event)
+			if err := s.recordCloudTrackingEvent(event, string(raw)); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					result.Skipped++
+					continue
+				}
+				return result, err
+			}
+			result.Imported++
+		}
+		result.LastEventID = lastID
+		if len(payload.Events) < limit {
+			break
+		}
+	}
+	if result.LastEventID > 0 {
+		_, err = s.db.Exec(`
+			INSERT INTO tracking_cloud_sync_state(source,last_event_id,updated_at)
+			VALUES(?,?,CURRENT_TIMESTAMP)
+			ON CONFLICT(source) DO UPDATE SET last_event_id=excluded.last_event_id, updated_at=CURRENT_TIMESTAMP`,
+			source,
+			result.LastEventID,
+		)
+		if err != nil {
+			return result, err
+		}
+	}
+	return result, nil
+}
+
+func cloudEventsURL(baseURL, sourceToken string, afterID int64, limit int) (string, error) {
+	endpoint, err := url.Parse(strings.TrimRight(baseURL, "/") + "/api/events")
+	if err != nil {
+		return "", err
+	}
+	values := endpoint.Query()
+	if sourceToken != "" {
+		values.Set("source", sourceToken)
+	}
+	if afterID > 0 {
+		values.Set("after_id", strconv.FormatInt(afterID, 10))
+	}
+	values.Set("limit", strconv.Itoa(limit))
+	endpoint.RawQuery = values.Encode()
+	return endpoint.String(), nil
+}
+
+func (s *Server) syncCloudTrackingEventsBestEffort(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
+	defer cancel()
+	_, _ = s.syncCloudTrackingEvents(ctx, trackingBaseURL(c), s.trackingSourceToken())
 }
 
 func (s *Server) exportCampaignCSV(c *gin.Context) {
@@ -1151,7 +1513,9 @@ func (s *Server) recordCloudOpenEvent(event cloudTrackingEventInput, _ string) e
 func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string) error {
 	var markID int64
 	var kind string
-	_ = s.db.QueryRow(`SELECT id,kind FROM tracking_marks WHERE token=?`, event.Token).Scan(&markID, &kind)
+	if err := s.db.QueryRow(`SELECT id,kind FROM tracking_marks WHERE token=?`, event.Token).Scan(&markID, &kind); err != nil {
+		return err
+	}
 	if event.Kind != "" {
 		kind = event.Kind
 	}
@@ -1161,7 +1525,7 @@ func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string)
 	triggeredAt := strings.TrimSpace(event.TriggeredAt)
 	if triggeredAt == "" {
 		_, err := s.db.Exec(
-			`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,referer,accept_language,is_prefetch,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?)`,
+			`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,referer,accept_language,forwarded_for,is_prefetch,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?)`,
 			markID,
 			event.Token,
 			kind,
@@ -1170,13 +1534,14 @@ func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string)
 			event.UserAgent,
 			event.Referer,
 			event.AcceptLanguage,
+			event.ForwardedFor,
 			tracker.LooksLikePrefetch(event.UserAgent),
 			raw,
 		)
 		return err
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,referer,accept_language,is_prefetch,raw_payload,triggered_at) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,referer,accept_language,forwarded_for,is_prefetch,raw_payload,triggered_at) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?,?)`,
 		markID,
 		event.Token,
 		kind,
@@ -1185,6 +1550,7 @@ func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string)
 		event.UserAgent,
 		event.Referer,
 		event.AcceptLanguage,
+		event.ForwardedFor,
 		tracker.LooksLikePrefetch(event.UserAgent),
 		raw,
 		triggeredAt,
@@ -1224,6 +1590,28 @@ func trackingBaseURL(c *gin.Context) string {
 		return value
 	}
 	return "http://localhost:8081"
+}
+
+func (s *Server) trackingSourceToken() string {
+	if value := strings.TrimSpace(os.Getenv("TRACKING_SOURCE_TOKEN")); value != "" {
+		return value
+	}
+	var token string
+	err := s.db.QueryRow(`SELECT value FROM app_settings WHERE key='tracking_source_token'`).Scan(&token)
+	if err == nil && strings.TrimSpace(token) != "" {
+		return token
+	}
+	token = uuid.NewString()
+	_, err = s.db.Exec(`
+		INSERT INTO app_settings(key,value,updated_at)
+		VALUES('tracking_source_token',?,CURRENT_TIMESTAMP)
+		ON CONFLICT(key) DO UPDATE SET value=app_settings.value`,
+		token,
+	)
+	if err != nil {
+		return ""
+	}
+	return token
 }
 
 func appBaseURL(c *gin.Context) string {
@@ -1340,23 +1728,9 @@ func forwardTrackingAsset(baseURL string, file *multipart.FileHeader, label stri
 
 // globalStats returns global tracking statistics
 func (s *Server) globalStats(c *gin.Context) {
+	s.syncCloudTrackingEventsBestEffort(c)
 	since := c.Query("since")
 	campaignID := c.Query("campaign")
-
-	var whereClause string
-	var args []interface{}
-	if since != "" || campaignID != "" {
-		conditions := []string{}
-		if since != "" {
-			conditions = append(conditions, "cr.sent_at >= ?")
-			args = append(args, since)
-		}
-		if campaignID != "" {
-			conditions = append(conditions, "cr.campaign_id = ?")
-			args = append(args, campaignID)
-		}
-		whereClause = "WHERE " + strings.Join(conditions, " AND ")
-	}
 
 	var stats struct {
 		TotalCampaigns int `json:"total_campaigns"`
@@ -1365,15 +1739,23 @@ func (s *Server) globalStats(c *gin.Context) {
 		TotalClicked   int `json:"total_clicked"`
 		TotalQRLoaded  int `json:"total_qr_loaded"`
 	}
-	query := `
-		SELECT
-			(SELECT COUNT(*) FROM campaigns) total_campaigns,
-			COALESCE((SELECT COUNT(*) FROM campaign_recipients cr ` + whereClause + ` AND cr.send_status='sent'), 0) total_sent,
-			COALESCE((SELECT SUM(cr.open_count>0) FROM campaign_recipients cr ` + whereClause + `), 0) total_opened,
-			COALESCE((SELECT COUNT(DISTINCT tme.mark_id) FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id ` + strings.Replace(whereClause, "cr.", "cr1.", -1) + ` AND tme.kind='click'), 0) total_clicked,
-			COALESCE((SELECT COUNT(DISTINCT tm.id) FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id ` + strings.Replace(whereClause, "cr.", "cr2.", -1) + ` AND tme.kind='qrcode' AND tme.is_prefetch=0), 0) total_qr_loaded
-	`
-	_ = s.db.QueryRow(query, args...).Scan(&stats.TotalCampaigns, &stats.TotalSent, &stats.TotalOpened, &stats.TotalClicked, &stats.TotalQRLoaded)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM campaigns`).Scan(&stats.TotalCampaigns)
+	where, args := recipientStatsWhere("cr", since, campaignID, "cr.send_status='sent'")
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM campaign_recipients cr `+where, args...).Scan(&stats.TotalSent)
+	where, args = recipientStatsWhere("cr", since, campaignID, "cr.open_count>0")
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM campaign_recipients cr `+where, args...).Scan(&stats.TotalOpened)
+	where, args = recipientStatsWhere("cr", since, campaignID, "tme.kind='click'")
+	_ = s.db.QueryRow(`
+		SELECT COUNT(DISTINCT tme.mark_id)
+		FROM tracking_mark_events tme
+		JOIN tracking_marks tm ON tm.id=tme.mark_id
+		JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id `+where, args...).Scan(&stats.TotalClicked)
+	where, args = recipientStatsWhere("cr", since, campaignID, "tme.kind='qrcode'", "tme.is_prefetch=0")
+	_ = s.db.QueryRow(`
+		SELECT COUNT(DISTINCT tm.id)
+		FROM tracking_mark_events tme
+		JOIN tracking_marks tm ON tm.id=tme.mark_id
+		JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id `+where, args...).Scan(&stats.TotalQRLoaded)
 
 	// Get daily trend for last 30 days
 	rows, _ := s.db.Query(`
@@ -1400,6 +1782,24 @@ func (s *Server) globalStats(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"summary": stats, "trend": trend})
 }
 
+func recipientStatsWhere(alias, since, campaignID string, extra ...string) (string, []any) {
+	conditions := []string{}
+	args := []any{}
+	if since != "" {
+		conditions = append(conditions, alias+".sent_at >= ?")
+		args = append(args, since)
+	}
+	if campaignID != "" {
+		conditions = append(conditions, alias+".campaign_id = ?")
+		args = append(args, campaignID)
+	}
+	conditions = append(conditions, extra...)
+	if len(conditions) == 0 {
+		return "", args
+	}
+	return "WHERE " + strings.Join(conditions, " AND "), args
+}
+
 // createVariant creates a new campaign variant for AB testing
 func (s *Server) createVariant(c *gin.Context) {
 	campaignID := c.Param("id")
@@ -1415,7 +1815,7 @@ func (s *Server) createVariant(c *gin.Context) {
 	if input.Weight == 0 {
 		input.Weight = 50
 	}
-	res, err := s.db.Exec(`INSERT INTO campaign_variants(campaign_id,name,subject,body_html,weight) VALUES(?,?,?,?)`,
+	res, err := s.db.Exec(`INSERT INTO campaign_variants(campaign_id,name,subject,body_html,weight) VALUES(?,?,?,?,?)`,
 		campaignID, input.Name, input.Subject, input.BodyHTML, input.Weight)
 	if err != nil {
 		fail(c, err)
@@ -1461,10 +1861,11 @@ func (s *Server) deleteVariant(c *gin.Context) {
 
 // abStats returns AB testing statistics
 func (s *Server) abStats(c *gin.Context) {
+	s.syncCloudTrackingEventsBestEffort(c)
 	campaignID := c.Param("id")
 
 	// Get variants
-	rows, err := s.db.Query(`SELECT id,name,subject,weight FROM campaign_variants WHERE campaign_id=?`, campaignID)
+	rows, err := s.db.Query(`SELECT id,name,subject,body_html,weight FROM campaign_variants WHERE campaign_id=? ORDER BY id`, campaignID)
 	if err != nil {
 		fail(c, err)
 		return
@@ -1473,10 +1874,10 @@ func (s *Server) abStats(c *gin.Context) {
 	variants := []gin.H{}
 	for rows.Next() {
 		var id int
-		var name, subject string
+		var name, subject, bodyHTML string
 		var weight int
-		_ = rows.Scan(&id, &name, &subject, &weight)
-		variants = append(variants, gin.H{"id": id, "name": name, "subject": subject, "weight": weight})
+		_ = rows.Scan(&id, &name, &subject, &bodyHTML, &weight)
+		variants = append(variants, gin.H{"id": id, "name": name, "subject": subject, "body_html": bodyHTML, "weight": weight})
 	}
 
 	// Get stats for each variant
@@ -1534,6 +1935,7 @@ func (s *Server) listLinks(c *gin.Context) {
 
 // linkStats returns statistics for a specific link
 func (s *Server) linkStats(c *gin.Context) {
+	s.syncCloudTrackingEventsBestEffort(c)
 	campaignID := c.Param("id")
 	linkID := c.Param("lid")
 

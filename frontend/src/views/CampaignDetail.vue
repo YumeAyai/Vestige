@@ -1,6 +1,6 @@
 <script setup>
 import * as echarts from 'echarts'
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../services/api'
 
@@ -13,10 +13,54 @@ const abStats = ref(null)
 const sending = ref(false)
 const sendError = ref('')
 const chartEl = ref(null)
+const rateChartEl = ref(null)
+const funnelChartEl = ref(null)
+const engagementTrendEl = ref(null)
 const linkChartEl = ref(null)
 const abChartEl = ref(null)
+const imageChartEl = ref(null)
+const linkEngagement = ref({ totalClicks: 0, uniqueClicks: 0, trend: [] })
 const filter = ref('all')
+const imageFilter = ref('all')
 const activeTab = ref('overview')
+const editingVariantId = ref(null)
+const variantError = ref('')
+const variantBodyMode = ref('preview')
+const variantPreview = ref({ subject: '', body_html: '' })
+const variantPreviewError = ref('')
+const variantForm = reactive({
+  name: '',
+  subject: '',
+  body_html: '',
+  weight: 50,
+})
+
+const overviewMetrics = computed(() => {
+  const summary = stats.value.summary || {}
+  const total = summary.total || 0
+  const sent = summary.sent || 0
+  const failed = summary.failed || 0
+  const opened = summary.opened || 0
+  const imageLoaded = summary.qr_loaded || 0
+  const pending = Math.max(total - sent - failed, 0)
+  const uniqueClicks = summary.clicked ?? linkEngagement.value.uniqueClicks ?? 0
+  const totalClicks = summary.click_events ?? linkEngagement.value.totalClicks ?? 0
+  return {
+    total,
+    sent,
+    failed,
+    pending,
+    opened,
+    imageLoaded,
+    totalClicks,
+    uniqueClicks,
+    sendRate: percent(sent, total),
+    pixelRate: percent(opened, sent),
+    imageLoadRate: percent(imageLoaded, sent),
+    clickReturnRate: percent(uniqueClicks, sent),
+    clickAfterLoadRate: percent(uniqueClicks, imageLoaded),
+  }
+})
 
 const visibleRecipients = computed(() => {
   if (filter.value === 'opened') return recipients.value.filter((item) => item.open_count > 0)
@@ -28,66 +72,306 @@ const visibleRecipients = computed(() => {
   return recipients.value
 })
 
+const imageRecipients = computed(() => {
+  if (imageFilter.value === 'loaded') return recipients.value.filter((item) => item.qr_load_count > 0)
+  if (imageFilter.value === 'unloaded') return recipients.value.filter((item) => item.qr_load_count === 0)
+  if (imageFilter.value === 'prefetch') return recipients.value.filter((item) => item.last_qr_is_prefetch)
+  return recipients.value
+})
+
+const variantPreviewContact = computed(() => {
+  const selected = recipients.value[0]
+  return selected
+    ? {
+        name: selected.name,
+        email: selected.email,
+        company: selected.name,
+      }
+    : {
+        name: '上海示例企业有限公司',
+        email: 'contact@example.com',
+        company: '上海示例企业有限公司',
+      }
+})
+
+function parseDevice(ua) {
+  if (!ua) return '未知'
+  if (ua.includes('iPhone')) return 'iPhone'
+  if (ua.includes('iPad')) return 'iPad'
+  if (ua.includes('Android')) return 'Android'
+  if (ua.includes('Mac')) return 'Mac'
+  if (ua.includes('Windows')) return 'Windows'
+  if (ua.includes('Linux')) return 'Linux'
+  return '其他'
+}
+
+function parseBrowser(ua) {
+  if (!ua) return '未知'
+  if (ua.includes('MicroMessenger')) return '微信'
+  if (ua.includes('QQ/')) return 'QQ'
+  if (ua.includes('Outlook')) return 'Outlook'
+  if (ua.includes('Edg/')) return 'Edge'
+  if (ua.includes('Firefox/')) return 'Firefox'
+  if (ua.includes('Chrome/')) return 'Chrome'
+  if (ua.includes('Safari/') && !ua.includes('Chrome/')) return 'Safari'
+  if (ua.includes('AppleWebKit')) return 'WebKit'
+  return '其他'
+}
+
+function formatSource(source) {
+  if (source === 'cloud') return '远端'
+  if (source === 'local') return '本地'
+  return source || '-'
+}
+
+function refererHost(referer) {
+  if (!referer) return ''
+  try {
+    return new URL(referer).host
+  } catch {
+    return referer
+  }
+}
+
+function formatOrigin(item) {
+  if (!item?.qr_load_count) return '-'
+  const parts = [formatSource(item.last_qr_source)]
+  if (item.last_qr_forwarded_for) parts.push('经代理')
+  const host = refererHost(item.last_qr_referer)
+  parts.push(host ? `来自 ${host}` : '直接请求')
+  return parts.filter(Boolean).join(' / ')
+}
+
+function formatPrefetch(value) {
+  return value ? '疑似预加载' : '正常加载'
+}
+
+function percent(count, total) {
+  if (!total) return 0
+  return Number(((count / total) * 100).toFixed(1))
+}
+
+function formatPercent(value) {
+  return `${Number(value || 0).toFixed(1)}%`
+}
+
+function pad(value) {
+  return String(value).padStart(2, '0')
+}
+
+function formatDateTime(value) {
+  if (!value) return '-'
+  const text = String(value).trim()
+  const normalized = text.includes('T') ? text : text.replace(' ', 'T')
+  const date = new Date(normalized)
+  if (Number.isNaN(date.getTime())) return text
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
 async function load() {
   campaign.value = await api.campaign(route.params.id)
+  if (!variantForm.subject && !variantForm.body_html) {
+    resetVariantForm()
+  }
   stats.value = await api.campaignStats(route.params.id)
   recipients.value = await api.recipients(route.params.id)
   links.value = await api.links(route.params.id).catch(() => [])
+  await loadLinkEngagement()
   abStats.value = await api.abStats(route.params.id).catch(() => null)
   await nextTick()
   renderChart()
+  renderRateChart()
+  renderFunnelChart()
+  renderEngagementTrend()
   if (links.value.length > 0) renderLinkChart()
   if (abStats.value?.variants?.length > 0) renderABChart()
+}
+
+async function loadLinkEngagement() {
+  const aggregateTrend = new Map()
+  let totalClicks = 0
+  let uniqueClicks = 0
+  await Promise.all(links.value.map(async (link) => {
+    try {
+      const data = await api.linkStats(route.params.id, link.id)
+      totalClicks += data.summary?.total_clicks || 0
+      uniqueClicks += data.summary?.unique_clicks || 0
+      ;(data.trend || []).forEach((item) => {
+        aggregateTrend.set(item.hour, (aggregateTrend.get(item.hour) || 0) + (item.count || 0))
+      })
+    } catch {
+      // Keep the overview usable even when a single link stat request fails.
+    }
+  }))
+  linkEngagement.value = {
+    totalClicks,
+    uniqueClicks,
+    trend: Array.from(aggregateTrend.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([hour, count]) => ({ hour, count })),
+  }
 }
 
 function renderChart() {
   if (!chartEl.value) return
   const chart = echarts.init(chartEl.value)
+  const { sent, failed, pending } = overviewMetrics.value
+  chart.setOption({
+    color: ['#087f8c', '#d92d20', '#98a2b3'],
+    tooltip: { trigger: 'item' },
+    legend: { bottom: 0, textStyle: { color: '#667085' } },
+    xAxis: {
+      show: false,
+    },
+    yAxis: {
+      show: false,
+    },
+    series: [
+      {
+        name: '发送状态',
+        type: 'pie',
+        radius: ['52%', '74%'],
+        center: ['50%', '44%'],
+        avoidLabelOverlap: true,
+        label: { color: '#344054', formatter: '{b} {c}' },
+        data: [
+          { name: '已发送', value: sent },
+          { name: '失败', value: failed },
+          { name: '待发送', value: pending },
+        ],
+      },
+    ],
+  })
+}
+
+function renderRateChart() {
+  if (!rateChartEl.value) return
+  const chart = echarts.init(rateChartEl.value)
+  const metrics = overviewMetrics.value
+  chart.setOption({
+    color: ['#087f8c'],
+    grid: { left: 68, right: 24, top: 20, bottom: 28 },
+    tooltip: { trigger: 'axis', valueFormatter: (value) => formatPercent(value) },
+    xAxis: {
+      type: 'value',
+      max: 100,
+      axisLabel: { color: '#667085', formatter: '{value}%' },
+      splitLine: { lineStyle: { color: '#e8ecf2' } },
+    },
+    yAxis: {
+      type: 'category',
+      data: ['发送率', '内容加载率', '像素加载率', '点击回报率'],
+      axisLabel: { color: '#344054' },
+      axisLine: { show: false },
+      axisTick: { show: false },
+    },
+    series: [{
+      name: '转化率',
+      type: 'bar',
+      barWidth: 18,
+      label: { show: true, position: 'right', color: '#344054', formatter: ({ value }) => formatPercent(value) },
+      data: [metrics.sendRate, metrics.imageLoadRate, metrics.pixelRate, metrics.clickReturnRate],
+    }],
+  })
+}
+
+function renderFunnelChart() {
+  if (!funnelChartEl.value) return
+  const chart = echarts.init(funnelChartEl.value)
+  const metrics = overviewMetrics.value
+  chart.setOption({
+    color: ['#3157a4', '#087f8c', '#a16207', '#d92d20'],
+    tooltip: { trigger: 'item', formatter: '{b}: {c}' },
+    series: [{
+      name: '响应漏斗',
+      type: 'funnel',
+      left: '8%',
+      top: 20,
+      bottom: 20,
+      width: '84%',
+      minSize: '18%',
+      maxSize: '100%',
+      sort: 'descending',
+      gap: 4,
+      label: { color: '#344054', formatter: '{b} {c}' },
+      data: [
+        { name: '收件人', value: metrics.total },
+        { name: '已发送', value: metrics.sent },
+        { name: '内容加载', value: metrics.imageLoaded },
+        { name: '唯一点击', value: metrics.uniqueClicks },
+      ],
+    }],
+  })
+}
+
+function renderEngagementTrend() {
+  if (!engagementTrendEl.value) return
+  const chart = echarts.init(engagementTrendEl.value)
   const hours = Array.from(
     new Set([
-      ...stats.value.trend.map((item) => item.hour),
+      ...(stats.value.trend || []).map((item) => item.hour),
       ...(stats.value.qr_trend || []).map((item) => item.hour),
+      ...(linkEngagement.value.trend || []).map((item) => item.hour),
     ]),
   ).sort()
-  const pixelByHour = new Map(stats.value.trend.map((item) => [item.hour, item.count]))
-  const qrByHour = new Map((stats.value.qr_trend || []).map((item) => [item.hour, item.count]))
+  const pixelByHour = new Map((stats.value.trend || []).map((item) => [item.hour, item.count]))
+  const imageByHour = new Map((stats.value.qr_trend || []).map((item) => [item.hour, item.count]))
+  const clickByHour = new Map((linkEngagement.value.trend || []).map((item) => [item.hour, item.count]))
   chart.setOption({
-    color: ['#00a376', '#3656a6'],
-    grid: { left: 36, right: 18, top: 28, bottom: 36 },
+    color: ['#087f8c', '#3157a4', '#a16207'],
+    grid: { left: 36, right: 18, top: 32, bottom: 42 },
     tooltip: { trigger: 'axis' },
-    legend: { top: 0, right: 8, textStyle: { color: '#687b72' } },
+    legend: { top: 0, right: 8, textStyle: { color: '#667085' } },
     xAxis: {
       type: 'category',
       data: hours,
-      axisLine: { lineStyle: { color: '#d8e3dd' } },
-      axisLabel: { color: '#687b72' },
+      axisLine: { lineStyle: { color: '#d9dee8' } },
+      axisLabel: { color: '#667085', rotate: 35 },
     },
     yAxis: {
       type: 'value',
       minInterval: 1,
-      splitLine: { lineStyle: { color: '#edf3ef' } },
-      axisLabel: { color: '#687b72' },
+      splitLine: { lineStyle: { color: '#e8ecf2' } },
+      axisLabel: { color: '#667085' },
     },
     series: [
-      {
-        name: '像素加载',
-        type: 'line',
-        smooth: true,
-        symbolSize: 7,
-        lineStyle: { width: 3 },
-        areaStyle: { color: 'rgba(0, 163, 118, 0.12)' },
-        data: hours.map((hour) => pixelByHour.get(hour) || 0),
-      },
-      {
-        name: '二维码加载',
-        type: 'line',
-        smooth: true,
-        symbolSize: 7,
-        lineStyle: { width: 3 },
-        areaStyle: { color: 'rgba(54, 86, 166, 0.1)' },
-        data: hours.map((hour) => qrByHour.get(hour) || 0),
-      },
+      { name: '像素加载', type: 'line', smooth: true, symbolSize: 6, data: hours.map((hour) => pixelByHour.get(hour) || 0) },
+      { name: '图片加载', type: 'line', smooth: true, symbolSize: 6, data: hours.map((hour) => imageByHour.get(hour) || 0) },
+      { name: '链接点击', type: 'line', smooth: true, symbolSize: 6, data: hours.map((hour) => clickByHour.get(hour) || 0) },
     ],
+  })
+}
+
+function renderImageChart() {
+  if (!imageChartEl.value) return
+  const chart = echarts.init(imageChartEl.value)
+  const hours = stats.value.qr_trend?.map((item) => item.hour) || []
+  const data = stats.value.qr_trend?.map((item) => item.count) || []
+  chart.setOption({
+    color: ['#3157a4'],
+    grid: { left: 36, right: 18, top: 28, bottom: 36 },
+    tooltip: { trigger: 'axis' },
+    xAxis: {
+      type: 'category',
+      data: hours,
+      axisLine: { lineStyle: { color: '#d9dee8' } },
+      axisLabel: { color: '#667085', rotate: 45 },
+    },
+    yAxis: {
+      type: 'value',
+      minInterval: 1,
+      splitLine: { lineStyle: { color: '#e8ecf2' } },
+      axisLabel: { color: '#667085' },
+    },
+    series: [{
+      name: '图片加载',
+      type: 'line',
+      smooth: true,
+      symbolSize: 7,
+      lineStyle: { width: 3 },
+      areaStyle: { color: 'rgba(54, 86, 166, 0.1)' },
+      data,
+    }],
   })
 }
 
@@ -104,20 +388,20 @@ async function renderLinkChart() {
     }
   }))
   chart.setOption({
-    color: ['#e88526'],
+    color: ['#a16207'],
     grid: { left: 36, right: 18, top: 28, bottom: 36 },
     tooltip: { trigger: 'axis' },
     xAxis: {
       type: 'category',
       data: linkNames,
-      axisLine: { lineStyle: { color: '#d8e3dd' } },
-      axisLabel: { color: '#687b72' },
+      axisLine: { lineStyle: { color: '#d9dee8' } },
+      axisLabel: { color: '#667085' },
     },
     yAxis: {
       type: 'value',
       minInterval: 1,
-      splitLine: { lineStyle: { color: '#edf3ef' } },
-      axisLabel: { color: '#687b72' },
+      splitLine: { lineStyle: { color: '#e8ecf2' } },
+      axisLabel: { color: '#667085' },
     },
     series: [{
       name: '点击次数',
@@ -135,21 +419,21 @@ function renderABChart() {
   const openRates = abStats.value.variants.map(v => v.open_rate || 0)
   const clickRates = abStats.value.variants.map(v => v.click_rate || 0)
   chart.setOption({
-    color: ['#00a376', '#e88526'],
+    color: ['#087f8c', '#a16207'],
     grid: { left: 36, right: 18, top: 28, bottom: 36 },
     tooltip: { trigger: 'axis' },
-    legend: { top: 0, right: 8, textStyle: { color: '#687b72' } },
+    legend: { top: 0, right: 8, textStyle: { color: '#667085' } },
     xAxis: {
       type: 'category',
       data: variantNames,
-      axisLine: { lineStyle: { color: '#d8e3dd' } },
-      axisLabel: { color: '#687b72' },
+      axisLine: { lineStyle: { color: '#d9dee8' } },
+      axisLabel: { color: '#667085' },
     },
     yAxis: {
       type: 'value',
       minInterval: 1,
-      splitLine: { lineStyle: { color: '#edf3ef' } },
-      axisLabel: { color: '#687b72', formatter: '{value}%' },
+      splitLine: { lineStyle: { color: '#e8ecf2' } },
+      axisLabel: { color: '#667085', formatter: '{value}%' },
     },
     series: [
       { name: '打开率', type: 'bar', barWidth: '30%', data: openRates },
@@ -171,7 +455,99 @@ async function send() {
   }
 }
 
+function resetVariantForm() {
+  editingVariantId.value = null
+  variantError.value = ''
+  variantPreviewError.value = ''
+  variantBodyMode.value = 'preview'
+  variantForm.name = ''
+  variantForm.subject = campaign.value?.subject || ''
+  variantForm.body_html = campaign.value?.body_html || ''
+  variantForm.weight = 50
+  renderVariantPreview()
+}
+
+function editVariant(item) {
+  const variant = item.variant || item
+  editingVariantId.value = variant.id
+  variantError.value = ''
+  variantForm.name = variant.name || ''
+  variantForm.subject = variant.subject || ''
+  variantForm.body_html = variant.body_html || ''
+  variantForm.weight = variant.weight || 50
+  variantBodyMode.value = 'preview'
+  renderVariantPreview()
+}
+
+async function renderVariantPreview() {
+  if (!variantForm.subject && !variantForm.body_html) {
+    variantPreview.value = { subject: '', body_html: '' }
+    return
+  }
+  variantPreviewError.value = ''
+  try {
+    variantPreview.value = await api.previewTemplate({
+      subject: variantForm.subject,
+      body_html: variantForm.body_html,
+      contact: variantPreviewContact.value,
+    })
+  } catch (err) {
+    variantPreviewError.value = err.message
+  }
+}
+
+async function saveVariant() {
+  variantError.value = ''
+  const payload = {
+    name: variantForm.name,
+    subject: variantForm.subject,
+    body_html: variantForm.body_html,
+    weight: Number(variantForm.weight) || 1,
+  }
+  try {
+    if (editingVariantId.value) {
+      await api.updateVariant(route.params.id, editingVariantId.value, payload)
+    } else {
+      await api.createVariant(route.params.id, payload)
+    }
+    resetVariantForm()
+    await load()
+    activeTab.value = 'ab'
+  } catch (err) {
+    variantError.value = err.message
+  }
+}
+
+async function removeVariant(item) {
+  const variant = item.variant || item
+  if (!window.confirm(`删除变体「${variant.name}」？`)) return
+  await api.deleteVariant(route.params.id, variant.id)
+  if (editingVariantId.value === variant.id) resetVariantForm()
+  await load()
+  activeTab.value = 'ab'
+}
+
 onMounted(load)
+watch(activeTab, async (tab) => {
+  await nextTick()
+  if (tab === 'overview') {
+    renderChart()
+    renderRateChart()
+    renderFunnelChart()
+    renderEngagementTrend()
+  }
+  if (tab === 'ab' && abStats.value?.variants?.length > 0) renderABChart()
+  if (tab === 'links' && links.value.length > 0) renderLinkChart()
+  if (tab === 'qr') renderImageChart()
+})
+watch(
+  () => [variantForm.subject, variantForm.body_html, recipients.value.length],
+  () => {
+    if (activeTab.value === 'ab' && variantBodyMode.value === 'preview') {
+      renderVariantPreview()
+    }
+  },
+)
 </script>
 
 <template>
@@ -181,9 +557,9 @@ onMounted(load)
         <h1>{{ campaign.name }}</h1>
         <p class="muted">{{ campaign.subject }}</p>
       </div>
-      <div class="toolbar">
+      <div class="toolbar campaign-actions">
         <a class="button secondary" :href="`/api/campaigns/${campaign.id}/export.csv`">导出 CSV</a>
-        <button :disabled="sending" @click="send">
+        <button class="button" :disabled="sending" @click="send">
           {{ sending ? '发送中' : '开始/重试发送' }}
         </button>
       </div>
@@ -196,37 +572,52 @@ onMounted(load)
       <button :class="{ active: activeTab === 'recipients' }" @click="activeTab = 'recipients'">收件人</button>
       <button :class="{ active: activeTab === 'links' }" @click="activeTab = 'links'">链接追踪</button>
       <button :class="{ active: activeTab === 'ab' }" @click="activeTab = 'ab'">AB 测试</button>
-      <button :class="{ active: activeTab === 'qr' }" @click="activeTab = 'qr'">二维码</button>
+      <button :class="{ active: activeTab === 'qr' }" @click="activeTab = 'qr'">图片埋点</button>
     </div>
 
     <!-- Overview Tab -->
     <template v-if="activeTab === 'overview'">
       <div class="grid five">
         <div class="card metric">
-          <strong>{{ stats.summary.total || 0 }}</strong>
+          <strong>{{ overviewMetrics.total }}</strong>
           <span>收件人</span>
         </div>
         <div class="card metric">
-          <strong>{{ stats.summary.sent || 0 }}</strong>
-          <span>发送成功</span>
+          <strong>{{ overviewMetrics.sent }}</strong>
+          <span>已发送</span>
         </div>
         <div class="card metric">
-          <strong>{{ stats.summary.opened || 0 }}</strong>
-          <span>像素加载</span>
+          <strong>{{ formatPercent(overviewMetrics.imageLoadRate) }}</strong>
+          <span>内容加载率</span>
         </div>
         <div class="card metric">
-          <strong>{{ stats.summary.qr_loaded || 0 }}</strong>
-          <span>二维码扫描</span>
+          <strong>{{ formatPercent(overviewMetrics.clickReturnRate) }}</strong>
+          <span>点击回报率</span>
         </div>
         <div class="card metric">
-          <strong>{{ stats.summary.failed || 0 }}</strong>
-          <span>发送失败</span>
+          <strong>{{ overviewMetrics.totalClicks }}</strong>
+          <span>总点击</span>
         </div>
       </div>
 
-      <div class="panel" style="margin-top: 16px">
-        <h2>加载趋势</h2>
-        <div ref="chartEl" class="chart"></div>
+      <div class="grid two overview-charts" style="margin-top: 16px">
+        <div class="panel">
+          <h2>发送状态</h2>
+          <div ref="chartEl" class="chart"></div>
+        </div>
+        <div class="panel">
+          <h2>回报率对比</h2>
+          <p class="muted">点击回报率按唯一点击 / 已发送计算。</p>
+          <div ref="rateChartEl" class="chart"></div>
+        </div>
+        <div class="panel">
+          <h2>响应漏斗</h2>
+          <div ref="funnelChartEl" class="chart"></div>
+        </div>
+        <div class="panel">
+          <h2>互动趋势</h2>
+          <div ref="engagementTrendEl" class="chart"></div>
+        </div>
       </div>
     </template>
 
@@ -236,12 +627,12 @@ onMounted(load)
         <div class="page-head">
           <div>
             <h2>收件人明细</h2>
-            <p class="muted">二维码加载是正文图片请求记录，比普通像素更适合判断邮件内容是否被加载。</p>
+            <p class="muted">图片加载是正文图片资源请求记录，比普通像素更适合判断邮件内容是否被加载。</p>
           </div>
           <select v-model="filter" style="max-width: 180px">
             <option value="all">全部</option>
-            <option value="qr_loaded">二维码已加载</option>
-            <option value="qr_unloaded">二维码未加载</option>
+            <option value="qr_loaded">图片已加载</option>
+            <option value="qr_unloaded">图片未加载</option>
             <option value="opened">像素已加载</option>
             <option value="unopened">像素未加载</option>
             <option value="failed">发送失败</option>
@@ -253,9 +644,14 @@ onMounted(load)
               <th class="col-company">公司</th>
               <th>邮箱</th>
               <th>发送</th>
-              <th>二维码加载</th>
-              <th>首次二维码加载</th>
+              <th>图片加载</th>
+              <th>首次图片加载</th>
+              <th>最近图片加载</th>
+              <th>来源判断</th>
               <th>最近 IP</th>
+              <th>预加载</th>
+              <th>浏览器</th>
+              <th>设备</th>
               <th>像素加载</th>
               <th>失败原因</th>
             </tr>
@@ -268,8 +664,13 @@ onMounted(load)
                 <span class="status" :class="item.send_status">{{ item.send_status }}</span>
               </td>
               <td>{{ item.qr_load_count }}</td>
-              <td>{{ item.first_qr_load_at || '-' }}</td>
+              <td>{{ formatDateTime(item.first_qr_load_at) }}</td>
+              <td>{{ formatDateTime(item.last_qr_load_at) }}</td>
+              <td>{{ formatOrigin(item) }}</td>
               <td>{{ item.last_qr_ip || '-' }}</td>
+              <td>{{ item.qr_load_count > 0 ? formatPrefetch(item.last_qr_is_prefetch) : '-' }}</td>
+              <td>{{ parseBrowser(item.last_qr_user_agent) }}</td>
+              <td>{{ parseDevice(item.last_qr_user_agent) }}</td>
               <td>{{ item.open_count }}</td>
               <td>{{ item.failure_reason }}</td>
             </tr>
@@ -292,23 +693,76 @@ onMounted(load)
     <!-- AB Test Tab -->
     <template v-if="activeTab === 'ab'">
       <div class="panel">
-        <h2>AB 测试对比</h2>
-        <p class="muted">对比不同邮件变体的效果</p>
-        <div v-if="!abStats?.variants?.length" class="empty">暂无 AB 测试数据</div>
+        <div class="page-head">
+          <div>
+            <h2>AB 测试</h2>
+            <p class="muted">创建多个主题和正文变体，发送时会按权重分配给收件人。</p>
+          </div>
+          <button type="button" class="secondary" @click="resetVariantForm">新建变体</button>
+        </div>
+
+        <form class="grid" style="margin-bottom: 16px" @submit.prevent="saveVariant">
+          <div class="grid four">
+            <label>变体名称<input v-model="variantForm.name" placeholder="A 版 / B 版" required /></label>
+            <label>权重<input v-model.number="variantForm.weight" type="number" min="1" required /></label>
+            <label style="grid-column: span 2">邮件主题<input v-model="variantForm.subject" required /></label>
+          </div>
+          <div class="field-block">
+            <div class="field-row">
+              <div>
+                <div class="field-label">变体正文</div>
+                <p class="muted">默认展示最终渲染效果；需要修改源码时切到 HTML。</p>
+              </div>
+              <div class="segmented">
+                <button
+                  type="button"
+                  :class="{ active: variantBodyMode === 'preview' }"
+                  @click="variantBodyMode = 'preview'; renderVariantPreview()"
+                >
+                  预览
+                </button>
+                <button type="button" :class="{ active: variantBodyMode === 'html' }" @click="variantBodyMode = 'html'">
+                  HTML
+                </button>
+              </div>
+            </div>
+            <div v-if="variantBodyMode === 'preview'" class="mail-preview campaign-preview">
+              <div class="mail-preview-subject">{{ variantPreview.subject || variantForm.subject || '邮件主题预览' }}</div>
+              <iframe title="AB 变体正文预览" :srcdoc="variantPreview.body_html || variantForm.body_html"></iframe>
+            </div>
+            <label v-else class="html-editor">HTML 正文<textarea v-model="variantForm.body_html" required /></label>
+            <p v-if="variantPreviewError" class="notice error">{{ variantPreviewError }}</p>
+          </div>
+          <p v-if="variantError" class="notice error">{{ variantError }}</p>
+          <div class="toolbar">
+            <button type="submit">{{ editingVariantId ? '更新变体' : '创建变体' }}</button>
+            <button type="button" class="secondary" @click="resetVariantForm">重置</button>
+          </div>
+        </form>
+
+        <div v-if="!abStats?.variants?.length" class="empty">暂无 AB 测试变体</div>
         <div v-else>
           <div ref="abChartEl" class="chart"></div>
           <table style="margin-top: 16px">
             <thead>
-              <tr><th>变体</th><th>发送</th><th>打开</th><th>点击</th><th>打开率</th><th>点击率</th></tr>
+              <tr><th>变体</th><th>权重</th><th>主题</th><th>发送</th><th>打开</th><th>点击</th><th>打开率</th><th>点击率</th><th>操作</th></tr>
             </thead>
             <tbody>
               <tr v-for="v in abStats.variants" :key="v.variant?.id">
                 <td>{{ v.variant?.name }}</td>
+                <td>{{ v.variant?.weight }}</td>
+                <td>{{ v.variant?.subject }}</td>
                 <td>{{ v.stats?.sent }}</td>
                 <td>{{ v.stats?.opened }}</td>
                 <td>{{ v.stats?.clicked }}</td>
                 <td>{{ v.open_rate?.toFixed(1) }}%</td>
                 <td>{{ v.click_rate?.toFixed(1) }}%</td>
+                <td>
+                  <div class="table-actions">
+                    <button type="button" class="secondary" @click="editVariant(v)">编辑</button>
+                    <button type="button" class="secondary danger" @click="removeVariant(v)">删除</button>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -316,12 +770,80 @@ onMounted(load)
       </div>
     </template>
 
-    <!-- QR Code Tab -->
+    <!-- Image Tracking Tab -->
     <template v-if="activeTab === 'qr'">
-      <div class="panel">
-        <h2>二维码追踪</h2>
-        <p class="muted">查看邮件中二维体贴的扫描详情</p>
-        <RouterLink class="button" :to="`/qrcode/${campaign.id}`">查看完整二维码报告</RouterLink>
+      <div class="grid four">
+        <div class="card metric">
+          <strong>{{ stats.summary.total || 0 }}</strong>
+          <span>收件人</span>
+        </div>
+        <div class="card metric">
+          <strong>{{ stats.summary.qr_loaded || 0 }}</strong>
+          <span>已加载</span>
+        </div>
+        <div class="card metric">
+          <strong>{{ stats.summary.qr_load_events || 0 }}</strong>
+          <span>加载次数</span>
+        </div>
+        <div class="card metric">
+          <strong>{{ stats.summary.qr_not_loaded || 0 }}</strong>
+          <span>未加载</span>
+        </div>
+      </div>
+
+      <div class="panel" style="margin-top: 16px">
+        <h2>图片加载趋势</h2>
+        <div ref="imageChartEl" class="chart"></div>
+      </div>
+
+      <div class="panel" style="margin-top: 16px">
+        <div class="page-head">
+          <div>
+            <h2>图片埋点报告</h2>
+            <p class="muted">埋点图片加载详情，包含远端同步来源、预加载判断、浏览器和设备信息。</p>
+          </div>
+          <select v-model="imageFilter" style="max-width: 160px">
+            <option value="all">全部</option>
+            <option value="loaded">已加载</option>
+            <option value="unloaded">未加载</option>
+            <option value="prefetch">疑似预加载</option>
+          </select>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th class="col-company">公司</th>
+              <th>邮箱</th>
+              <th>发送</th>
+              <th>像素加载</th>
+              <th>图片加载</th>
+              <th>首次加载</th>
+              <th>最近加载</th>
+              <th>来源判断</th>
+              <th>IP</th>
+              <th>预加载</th>
+              <th>浏览器</th>
+              <th>设备</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="item in imageRecipients" :key="item.id">
+              <td class="company-cell">{{ item.name }}</td>
+              <td><span class="data-chip tone-0">{{ item.email }}</span></td>
+              <td><span class="status" :class="item.send_status">{{ item.send_status }}</span></td>
+              <td>{{ item.open_count }}</td>
+              <td>{{ item.qr_load_count }}</td>
+              <td>{{ formatDateTime(item.first_qr_load_at) }}</td>
+              <td>{{ formatDateTime(item.last_qr_load_at) }}</td>
+              <td>{{ formatOrigin(item) }}</td>
+              <td>{{ item.last_qr_ip || '-' }}</td>
+              <td>{{ item.qr_load_count > 0 ? formatPrefetch(item.last_qr_is_prefetch) : '-' }}</td>
+              <td>{{ parseBrowser(item.last_qr_user_agent) }}</td>
+              <td>{{ parseDevice(item.last_qr_user_agent) }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-if="imageRecipients.length === 0" class="empty">暂无符合条件的记录</p>
       </div>
     </template>
   </section>

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../services/api'
 
@@ -11,6 +11,9 @@ const mailboxes = ref([])
 const templates = ref([])
 const selectedTemplate = ref('')
 const contactQuery = ref('')
+const bodyMode = ref('preview')
+const preview = ref({ subject: '', body_html: '' })
+const previewError = ref('')
 const form = reactive({
   name: '',
   subject: '',
@@ -32,6 +35,21 @@ const filteredContacts = computed(() => {
     [item.name, item.email, item.company, item.phone, item.tags]
       .filter(Boolean)
       .some((value) => String(value).toLowerCase().includes(query)),
+  )
+})
+
+const previewContact = computed(() => {
+  const selected = contacts.value.find((item) => form.contact_ids.includes(item.id))
+  return (
+    selected || {
+      name: '上海示例企业有限公司',
+      email: 'contact@example.com',
+      company: '上海示例企业有限公司',
+      department: '行政部',
+      phone: '021-00000000',
+      tags: '',
+      notes: '',
+    }
   )
 })
 
@@ -60,6 +78,7 @@ function applyTemplate() {
   form.subject = tpl.subject
   form.body_html = tpl.body_html
   if (!form.name) form.name = tpl.name
+  bodyMode.value = 'preview'
 }
 
 function isContactSelected(id) {
@@ -76,6 +95,23 @@ function toggleContact(id) {
   }
 }
 
+async function renderPreview() {
+  if (!form.subject && !form.body_html) {
+    preview.value = { subject: '', body_html: '' }
+    return
+  }
+  previewError.value = ''
+  try {
+    preview.value = await api.previewTemplate({
+      subject: form.subject,
+      body_html: form.body_html,
+      contact: previewContact.value,
+    })
+  } catch (err) {
+    previewError.value = err.message
+  }
+}
+
 async function create() {
   const result = await api.createCampaign({
     ...form,
@@ -86,6 +122,10 @@ async function create() {
 }
 
 onMounted(load)
+watch(
+  () => [form.subject, form.body_html, form.contact_ids.join(','), contacts.value.length],
+  renderPreview,
+)
 </script>
 
 <template>
@@ -121,7 +161,32 @@ onMounted(load)
           </select>
         </label>
         <label>邮件主题<input v-model="form.subject" required /></label>
-        <label>HTML 正文<textarea v-model="form.body_html" required /></label>
+        <div class="field-block">
+          <div class="field-row">
+            <div>
+              <div class="field-label">邮件正文</div>
+              <p class="muted">默认展示最终渲染效果；需要修改源码时切到 HTML。</p>
+            </div>
+            <div class="segmented">
+              <button
+                type="button"
+                :class="{ active: bodyMode === 'preview' }"
+                @click="bodyMode = 'preview'; renderPreview()"
+              >
+                预览
+              </button>
+              <button type="button" :class="{ active: bodyMode === 'html' }" @click="bodyMode = 'html'">
+                HTML
+              </button>
+            </div>
+          </div>
+          <div v-if="bodyMode === 'preview'" class="mail-preview campaign-preview">
+            <div class="mail-preview-subject">{{ preview.subject || form.subject || '邮件主题预览' }}</div>
+            <iframe title="邮件正文预览" :srcdoc="preview.body_html || form.body_html"></iframe>
+          </div>
+          <label v-else class="html-editor">HTML 正文<textarea v-model="form.body_html" required /></label>
+          <p v-if="previewError" class="notice error">{{ previewError }}</p>
+        </div>
         <div class="field-block">
           <div class="field-label">收件人</div>
           <input v-model="contactQuery" placeholder="搜索公司、邮箱、电话或标签" />

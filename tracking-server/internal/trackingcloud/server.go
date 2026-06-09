@@ -34,6 +34,7 @@ type Event struct {
 	UserAgent      string `json:"user_agent,omitempty"`
 	Referer        string `json:"referer,omitempty"`
 	AcceptLanguage string `json:"accept_language,omitempty"`
+	ForwardedFor   string `json:"forwarded_for,omitempty"`
 }
 
 func Migrate(conn *sql.DB) error {
@@ -49,13 +50,53 @@ CREATE TABLE IF NOT EXISTS tracking_events (
   user_agent TEXT NOT NULL DEFAULT '',
   referer TEXT NOT NULL DEFAULT '',
   accept_language TEXT NOT NULL DEFAULT '',
+  forwarded_for TEXT NOT NULL DEFAULT '',
   raw_payload TEXT NOT NULL DEFAULT '',
   triggered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_tracking_events_lookup ON tracking_events(source,campaign,kind,triggered_at);
 CREATE INDEX IF NOT EXISTS idx_tracking_events_token ON tracking_events(token,kind,triggered_at);
+CREATE INDEX IF NOT EXISTS idx_tracking_events_source_cursor ON tracking_events(source,id);
 `)
-	return err
+	if err != nil {
+		return err
+	}
+	return addColumns(conn, "tracking_events", map[string]string{
+		"forwarded_for": "TEXT NOT NULL DEFAULT ''",
+	})
+}
+
+func addColumns(conn *sql.DB, table string, columns map[string]string) error {
+	rows, err := conn.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for name, definition := range columns {
+		if existing[name] {
+			continue
+		}
+		if _, err := conn.Exec(`ALTER TABLE ` + table + ` ADD COLUMN ` + name + ` ` + definition); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func New(db *sql.DB) *gin.Engine {
@@ -176,7 +217,7 @@ func (s *Server) uploadAsset(c *gin.Context) {
 		"placeholder": `{{TrackingImage "` + name + `"}}`,
 		"image_url":   tracker.AssetImageURL(baseURL, "preview", name),
 		"html":        tracker.TrackingImageHTML(baseURL, "preview", name, label, width),
-		"collects":    []string{"ip", "user_agent", "referer", "accept_language", "triggered_at", "is_prefetch"},
+		"collects":    []string{"ip", "user_agent", "referer", "accept_language", "forwarded_for", "triggered_at", "is_prefetch"},
 	})
 }
 
@@ -228,7 +269,7 @@ func (s *Server) events(c *gin.Context) {
 	}
 	args = append(args, limit)
 	rows, err := s.db.Query(`
-		SELECT id,source,campaign,link,token,kind,triggered_at,ip,user_agent,referer,accept_language
+		SELECT id,source,campaign,link,token,kind,triggered_at,ip,user_agent,referer,accept_language,forwarded_for
 		FROM tracking_events `+where+`
 		ORDER BY id ASC
 		LIMIT ?`, args...)
@@ -240,7 +281,7 @@ func (s *Server) events(c *gin.Context) {
 	items := []Event{}
 	for rows.Next() {
 		var item Event
-		if err := rows.Scan(&item.ID, &item.Source, &item.Campaign, &item.Link, &item.Token, &item.Kind, &item.TriggeredAt, &item.IP, &item.UserAgent, &item.Referer, &item.AcceptLanguage); err != nil {
+		if err := rows.Scan(&item.ID, &item.Source, &item.Campaign, &item.Link, &item.Token, &item.Kind, &item.TriggeredAt, &item.IP, &item.UserAgent, &item.Referer, &item.AcceptLanguage, &item.ForwardedFor); err != nil {
 			fail(c, err)
 			return
 		}
@@ -263,10 +304,10 @@ func (s *Server) record(c *gin.Context, event Event) error {
 		"user_agent":      event.UserAgent,
 		"referer":         event.Referer,
 		"accept_language": event.AcceptLanguage,
-		"forwarded_for":   c.GetHeader("X-Forwarded-For"),
+		"forwarded_for":   event.ForwardedFor,
 	})
 	_, err := s.db.Exec(
-		`INSERT INTO tracking_events(source,campaign,link,token,kind,ip,user_agent,referer,accept_language,raw_payload) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO tracking_events(source,campaign,link,token,kind,ip,user_agent,referer,accept_language,forwarded_for,raw_payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
 		event.Source,
 		event.Campaign,
 		event.Link,
@@ -276,6 +317,7 @@ func (s *Server) record(c *gin.Context, event Event) error {
 		event.UserAgent,
 		event.Referer,
 		event.AcceptLanguage,
+		event.ForwardedFor,
 		string(raw),
 	)
 	return err
@@ -292,6 +334,7 @@ func eventFromRequest(c *gin.Context, kind string) Event {
 		UserAgent:      c.GetHeader("User-Agent"),
 		Referer:        c.GetHeader("Referer"),
 		AcceptLanguage: c.GetHeader("Accept-Language"),
+		ForwardedFor:   c.GetHeader("X-Forwarded-For"),
 	}
 }
 

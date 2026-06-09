@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS tracking_mark_events (
   user_agent TEXT NOT NULL DEFAULT '',
   referer TEXT NOT NULL DEFAULT '',
   accept_language TEXT NOT NULL DEFAULT '',
+  forwarded_for TEXT NOT NULL DEFAULT '',
   is_prefetch INTEGER NOT NULL DEFAULT 0,
   raw_payload TEXT NOT NULL DEFAULT '',
   triggered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -135,6 +136,18 @@ CREATE TABLE IF NOT EXISTS campaign_variants (
   weight INTEGER NOT NULL DEFAULT 50,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS tracking_cloud_sync_state (
+  source TEXT PRIMARY KEY,
+  last_event_id INTEGER NOT NULL DEFAULT 0,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );`
 	if _, err := conn.Exec(schema); err != nil {
 		return err
@@ -142,6 +155,7 @@ CREATE TABLE IF NOT EXISTS campaign_variants (
 	err = addColumns(conn, "tracking_mark_events", map[string]string{
 		"referer":         "TEXT NOT NULL DEFAULT ''",
 		"accept_language": "TEXT NOT NULL DEFAULT ''",
+		"forwarded_for":   "TEXT NOT NULL DEFAULT ''",
 		"is_prefetch":     "INTEGER NOT NULL DEFAULT 0",
 	})
 	if err != nil {

@@ -45,21 +45,26 @@ type Campaign struct {
 }
 
 type Recipient struct {
-	ID            int64  `json:"id"`
-	CampaignID    int64  `json:"campaign_id"`
-	ContactID     int64  `json:"contact_id"`
-	Email         string `json:"email"`
-	Name          string `json:"name"`
-	TrackingID    string `json:"tracking_id"`
-	SendStatus    string `json:"send_status"`
-	FailureReason string `json:"failure_reason"`
-	SentAt        string `json:"sent_at"`
-	FirstOpenedAt string `json:"first_opened_at"`
-	LastOpenedAt  string `json:"last_opened_at"`
-	OpenCount     int    `json:"open_count"`
-	QRLoadCount   int    `json:"qr_load_count"`
-	FirstQRLoadAt string `json:"first_qr_load_at"`
-	LastQRLoadAt  string `json:"last_qr_load_at"`
-	LastQRIP      string `json:"last_qr_ip"`
-	LastQRUA      string `json:"last_qr_user_agent"`
+	ID             int64  `json:"id"`
+	CampaignID     int64  `json:"campaign_id"`
+	ContactID      int64  `json:"contact_id"`
+	Email          string `json:"email"`
+	Name           string `json:"name"`
+	TrackingID     string `json:"tracking_id"`
+	SendStatus     string `json:"send_status"`
+	FailureReason  string `json:"failure_reason"`
+	SentAt         string `json:"sent_at"`
+	FirstOpenedAt  string `json:"first_opened_at"`
+	LastOpenedAt   string `json:"last_opened_at"`
+	OpenCount      int    `json:"open_count"`
+	QRLoadCount    int    `json:"qr_load_count"`
+	FirstQRLoadAt  string `json:"first_qr_load_at"`
+	LastQRLoadAt   string `json:"last_qr_load_at"`
+	LastQRIP       string `json:"last_qr_ip"`
+	LastQRUA       string `json:"last_qr_user_agent"`
+	LastQRXFF      string `json:"last_qr_forwarded_for"`
+	LastQRSource   string `json:"last_qr_source"`
+	LastQRReferer  string `json:"last_qr_referer"`
+	LastQRLang     string `json:"last_qr_accept_language"`
+	LastQRPrefetch bool   `json:"last_qr_is_prefetch"`
 }

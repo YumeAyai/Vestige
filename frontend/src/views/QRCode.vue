@@ -32,23 +32,23 @@ function renderChart() {
   const data = stats.value.qr_trend?.map(t => t.count) || []
 
   chart.setOption({
-    color: ['#3656a6'],
+    color: ['#3157a4'],
     grid: { left: 36, right: 18, top: 28, bottom: 36 },
     tooltip: { trigger: 'axis' },
     xAxis: {
       type: 'category',
       data: hours,
-      axisLine: { lineStyle: { color: '#d8e3dd' } },
-      axisLabel: { color: '#687b72', rotate: 45 },
+      axisLine: { lineStyle: { color: '#d9dee8' } },
+      axisLabel: { color: '#667085', rotate: 45 },
     },
     yAxis: {
       type: 'value',
       minInterval: 1,
-      splitLine: { lineStyle: { color: '#edf3ef' } },
-      axisLabel: { color: '#687b72' },
+      splitLine: { lineStyle: { color: '#e8ecf2' } },
+      axisLabel: { color: '#667085' },
     },
     series: [{
-      name: '二维码加载',
+      name: '图片加载',
       type: 'line',
       smooth: true,
       symbolSize: 7,
@@ -59,7 +59,7 @@ function renderChart() {
   })
 }
 
-function parseUserAgent(ua) {
+function parseDevice(ua) {
   if (!ua) return '未知'
   if (ua.includes('iPhone')) return 'iPhone'
   if (ua.includes('iPad')) return 'iPad'
@@ -70,22 +70,81 @@ function parseUserAgent(ua) {
   return '其他'
 }
 
+function parseBrowser(ua) {
+  if (!ua) return '未知'
+  if (ua.includes('MicroMessenger')) return '微信'
+  if (ua.includes('QQ/')) return 'QQ'
+  if (ua.includes('Outlook')) return 'Outlook'
+  if (ua.includes('Edg/')) return 'Edge'
+  if (ua.includes('Firefox/')) return 'Firefox'
+  if (ua.includes('Chrome/')) return 'Chrome'
+  if (ua.includes('Safari/') && !ua.includes('Chrome/')) return 'Safari'
+  if (ua.includes('AppleWebKit')) return 'WebKit'
+  return '其他'
+}
+
 function parseIP(ip) {
   if (!ip) return '-'
   return ip
 }
 
+function formatSource(source) {
+  if (source === 'cloud') return '远端'
+  if (source === 'local') return '本地'
+  return source || '-'
+}
+
+function refererHost(referer) {
+  if (!referer) return ''
+  try {
+    return new URL(referer).host
+  } catch {
+    return referer
+  }
+}
+
+function formatOrigin(item) {
+  if (!item?.qr_load_count) return '-'
+  const parts = [formatSource(item.last_qr_source)]
+  if (item.last_qr_forwarded_for) parts.push('经代理')
+  const host = refererHost(item.last_qr_referer)
+  parts.push(host ? `来自 ${host}` : '直接请求')
+  return parts.filter(Boolean).join(' / ')
+}
+
+function formatPrefetch(value) {
+  return value ? '疑似预加载' : '正常加载'
+}
+
+function pad(value) {
+  return String(value).padStart(2, '0')
+}
+
+function formatDateTime(value) {
+  if (!value) return '-'
+  const text = String(value).trim()
+  const normalized = text.includes('T') ? text : text.replace(' ', 'T')
+  const date = new Date(normalized)
+  if (Number.isNaN(date.getTime())) return text
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
 function exportCSV() {
-  const rows = [['公司', '邮箱', '加载次数', '首次加载', '最近加载', 'IP', '设备']]
+  const rows = [['公司', '邮箱', '发送状态', '像素打开', '图片加载次数', '首次图片加载', '最近图片加载', '来源判断', 'IP', '预加载', '浏览器', '设备']]
   for (const r of visibleRecipients.value) {
     rows.push([
       r.name,
       r.email,
+      r.send_status,
+      r.open_count,
       r.qr_load_count,
-      r.first_qr_load_at || '',
-      r.last_qr_load_at || '',
+      formatDateTime(r.first_qr_load_at),
+      formatDateTime(r.last_qr_load_at),
+      formatOrigin(r),
       parseIP(r.last_qr_ip),
-      parseUserAgent(r.last_qr_user_agent)
+      formatPrefetch(r.last_qr_is_prefetch),
+      parseBrowser(r.last_qr_user_agent),
+      parseDevice(r.last_qr_user_agent)
     ])
   }
   const csv = rows.map(r => r.map(c => `"${c}"`).join(',')).join('\n')
@@ -105,7 +164,7 @@ onMounted(load)
   <section v-if="campaign">
     <div class="page-head">
       <div>
-        <h1>二维码追踪 - {{ campaign.name }}</h1>
+        <h1>图片埋点 - {{ campaign.name }}</h1>
         <p class="muted">{{ campaign.subject }}</p>
       </div>
       <button class="button secondary" @click="exportCSV">导出 CSV</button>
@@ -118,33 +177,33 @@ onMounted(load)
       </div>
       <div class="card metric">
         <strong>{{ stats.summary.qr_loaded || 0 }}</strong>
-        <span>已扫描</span>
+        <span>已加载</span>
       </div>
       <div class="card metric">
         <strong>{{ stats.summary.qr_load_events || 0 }}</strong>
-        <span>扫描次数</span>
+        <span>加载次数</span>
       </div>
       <div class="card metric">
         <strong>{{ stats.summary.qr_not_loaded || 0 }}</strong>
-        <span>未扫描</span>
+        <span>未加载</span>
       </div>
     </div>
 
     <div class="panel" style="margin-top: 16px">
-      <h2>扫描趋势</h2>
+      <h2>加载趋势</h2>
       <div ref="chartEl" class="chart"></div>
     </div>
 
     <div class="panel" style="margin-top: 16px">
       <div class="page-head">
         <div>
-          <h2>扫描记录</h2>
-          <p class="muted">二维码扫描详情，包含时间、IP 和设备信息。</p>
+          <h2>加载记录</h2>
+          <p class="muted">埋点图片加载详情，包含远端同步来源、请求头、预加载判断和设备信息。</p>
         </div>
         <select v-model="filter" style="max-width: 160px">
           <option value="all">全部</option>
-          <option value="loaded">已扫描</option>
-          <option value="unloaded">未扫描</option>
+          <option value="loaded">已加载</option>
+          <option value="unloaded">未加载</option>
         </select>
       </div>
       <table>
@@ -152,10 +211,15 @@ onMounted(load)
           <tr>
             <th class="col-company">公司</th>
             <th>邮箱</th>
-            <th>扫描次数</th>
-            <th>首次扫描</th>
-            <th>最近扫描</th>
+            <th>发送</th>
+            <th>像素打开</th>
+            <th>加载次数</th>
+            <th>首次加载</th>
+            <th>最近加载</th>
+            <th>来源判断</th>
             <th>IP</th>
+            <th>预加载</th>
+            <th>浏览器</th>
             <th>设备</th>
           </tr>
         </thead>
@@ -163,11 +227,16 @@ onMounted(load)
           <tr v-for="item in visibleRecipients" :key="item.id">
             <td class="company-cell">{{ item.name }}</td>
             <td><span class="data-chip tone-0">{{ item.email }}</span></td>
+            <td><span :class="['status', item.send_status]">{{ item.send_status }}</span></td>
+            <td>{{ item.open_count }}</td>
             <td>{{ item.qr_load_count }}</td>
-            <td>{{ item.first_qr_load_at || '-' }}</td>
-            <td>{{ item.last_qr_load_at || '-' }}</td>
+            <td>{{ formatDateTime(item.first_qr_load_at) }}</td>
+            <td>{{ formatDateTime(item.last_qr_load_at) }}</td>
+            <td>{{ formatOrigin(item) }}</td>
             <td>{{ parseIP(item.last_qr_ip) }}</td>
-            <td>{{ parseUserAgent(item.last_qr_user_agent) }}</td>
+            <td>{{ item.qr_load_count > 0 ? formatPrefetch(item.last_qr_is_prefetch) : '-' }}</td>
+            <td>{{ parseBrowser(item.last_qr_user_agent) }}</td>
+            <td>{{ parseDevice(item.last_qr_user_agent) }}</td>
           </tr>
         </tbody>
       </table>

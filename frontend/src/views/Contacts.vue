@@ -16,12 +16,12 @@ const batch = reactive({ tags: '', notes: '' })
 const notice = ref('')
 const form = reactive({ name: '', email: '', company: '', department: '', phone: '', tags: '', notes: '' })
 const columns = reactive([
-  { key: 'select', label: '', width: 54, min: 54 },
-  { key: 'company', label: '公司', width: 380, min: 240 },
-  { key: 'email', label: '邮箱', width: 320, min: 220 },
-  { key: 'phone', label: '联系电话', width: 240, min: 180 },
-  { key: 'tags', label: '标签', width: 220, min: 160 },
-  { key: 'notes', label: '备注', width: 360, min: 220 },
+  { key: 'select', label: '', width: 48, min: 48 },
+  { key: 'company', label: '公司', width: 260, min: 200 },
+  { key: 'email', label: '邮箱', width: 260, min: 210 },
+  { key: 'phone', label: '联系电话', width: 150, min: 130 },
+  { key: 'tags', label: '标签', width: 150, min: 120 },
+  { key: 'notes', label: '备注', width: 240, min: 180 },
 ])
 
 let resizeState = null
