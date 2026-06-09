@@ -32,10 +32,32 @@ const hasPrevious = computed(() => offset.value > 0)
 const hasNext = computed(() => offset.value + pageSize.value < total.value)
 
 async function load() {
-  const data = await api.contactsPage({ limit: pageSize.value, offset: offset.value, q: query.value })
-  items.value = data.items
-  total.value = data.total
+  const data = await loadContactPage()
+  items.value = data.items || []
+  total.value = data.total || 0
   selectedIds.value = selectedIds.value.filter((id) => items.value.some((item) => item.id === id))
+}
+
+async function loadContactPage() {
+  try {
+    return await api.contactsPage({ limit: pageSize.value, offset: offset.value, q: query.value })
+  } catch (error) {
+    const all = await api.contacts()
+    const filtered = filterContacts(all)
+    return {
+      items: filtered.slice(offset.value, offset.value + pageSize.value),
+      total: filtered.length,
+      limit: pageSize.value,
+      offset: offset.value,
+    }
+  }
+}
+
+function filterContacts(list) {
+  const keyword = query.value.trim().toLowerCase()
+  if (!keyword) return list
+  return list.filter((item) => [item.company, item.name, item.email, item.phone, item.tags, item.notes]
+    .some((value) => String(value || '').toLowerCase().includes(keyword)))
 }
 
 async function save() {
