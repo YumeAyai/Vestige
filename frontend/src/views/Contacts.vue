@@ -92,13 +92,13 @@ onMounted(load)
         <input type="file" accept=".xlsx,.csv" style="display:none" :disabled="importing" @change="upload" />
       </label>
     </div>
-    <form class="panel grid four" style="margin-bottom:16px" @submit.prevent="save">
+    <form class="panel grid five contact-form" @submit.prevent="save">
       <label>公司名称<input v-model="form.company" required /></label>
       <label>邮箱<input v-model="form.email" type="email" required /></label>
       <label>手机号<input v-model="form.phone" /></label>
       <label>标签<input v-model="form.tags" /></label>
       <label>备注<input v-model="form.notes" /></label>
-      <button>新增联系人</button>
+      <button class="contact-submit">新增联系人</button>
     </form>
     <div class="panel">
       <div class="excel-table-wrap">

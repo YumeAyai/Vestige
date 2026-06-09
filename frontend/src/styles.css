@@ -154,6 +154,10 @@ nav a:hover {
   grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
+.grid.five {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
 .panel,
 .card {
   background: rgba(255, 255, 255, 0.96);
@@ -311,6 +315,15 @@ label {
   color: #3f544b;
   font-size: 13px;
   font-weight: 700;
+}
+
+.contact-form {
+  align-items: end;
+  margin-bottom: 16px;
+}
+
+.contact-submit {
+  grid-column: 5;
 }
 
 .picker-list {
@@ -675,6 +688,14 @@ td a {
   .grid.two {
     grid-template-columns: 1fr;
   }
+
+  .grid.five {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .contact-submit {
+    grid-column: auto;
+  }
 }
 
 @media (max-width: 760px) {
@@ -808,7 +829,12 @@ td a {
     display: grid;
   }
 
-  .grid.four {
+  .grid.four,
+  .grid.five {
     grid-template-columns: 1fr;
+  }
+
+  .contact-submit {
+    width: 100%;
   }
 }
