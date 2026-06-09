@@ -1,148 +1,142 @@
-# 邮件阅读埋点设计
+# 匿名埋点云设计
 
-当前代码把追踪逻辑拆在 `internal/tracker`，主 Gin 应用只是挂载一个兼容接口：
+本项目采用分离架构：
 
-```text
-GET /api/track/open.gif?tid=<tracking_id>
-```
+- 用户本地系统：运行 `local-backend/cmd/server`，保存联系人、邮箱、模板、发送记录、AB 测试分组等敏感数据。
+- 埋点云服务：运行 `tracking-server/cmd/server`，只接收匿名 open/click/qrcode 事件并做聚合。
 
-邮件发送时，每个收件人都会有独立的 `tracking_id`，并在 HTML 里追加一个 1x1 透明 GIF：
+云端不保存联系人、邮箱、公司名、模板正文等 PII。邮件里只植入本地生成的随机 `rid` / `token`，云端只能看到某个匿名 token 在某个时间触发了某类事件。
 
-```html
-<img src="https://track.example.com/api/track/open.gif?tid=..." width="1" height="1" alt="" style="display:none;width:1px;height:1px;border:0" />
-```
+## 本地系统
 
-## 为什么要拆
-
-业务后台负责：
-
-- 联系人导入
-- 模板渲染
-- 单封单收件人发送
-- 统计和导出
-
-tracker 负责：
-
-- 返回透明图片
-- 记录 `tracking_id / ip / user_agent / opened_at`
-- 更新收件人的首次阅读、最近阅读、阅读次数
-
-这样以后可以把 tracker 单独部署到 Lambda、Cloudflare Workers、API Gateway 或独立 Go 服务，而不影响后台业务代码。
-
-## 当前本地模式
-
-默认情况下，图片地址使用当前后台地址：
-
-```text
-http://localhost:8080/api/track/open.gif?tid=...
-```
-
-适合本地测试，但真实邮件里必须使用公网 HTTPS 地址，否则对方邮箱客户端无法加载图片。
-
-## 独立 tracker 模式
-
-生产环境建议设置：
+启动：
 
 ```bash
-TRACKING_BASE_URL=https://track.your-company.com
+TRACKING_BASE_URL=https://track.example.com go run ./local-backend/cmd/server
 ```
 
-这样邮件里的图片地址会变成：
+如果不设置 `TRACKING_BASE_URL`，开发环境默认使用：
 
 ```text
-https://track.your-company.com/api/track/open.gif?tid=...
+http://localhost:8081
 ```
 
-后续如果拆到 Lambda，Lambda 只需要实现同样的 GET 接口，并把事件写回数据库、Webhook 或队列。
+本地系统负责：
 
-## 二维码图片触发点
+- 导入和保存联系人
+- 管理模板与发件邮箱
+- 生成 campaign recipient 的随机 `tracking_id`
+- 把透明像素植入邮件正文
+- 为 `{{.QRCode}}` 生成随机 token
+- 从埋点云拉取匿名事件后导入本地数据库
+- 用本地数据计算打开率、二维码加载率、AB 测试结果
 
-除默认打开像素外，模板里的二维码变量也会进入埋点体系。当前支持：
+## 埋点云
 
-```text
-{{.QRCode}}
+启动：
+
+```bash
+TRACKING_ADDR=:8081 TRACKING_DB_PATH=data/tracking.db go run ./tracking-server/cmd/server
 ```
 
-发送时，本地会为每个收件人创建一条 `tracking_marks`：
+埋点云负责：
 
-```text
-campaign_recipient_id
-token
-kind = qrcode
-label = QRCode
-target_url
-```
+- `GET /p`：记录打开事件，返回 1x1 GIF。
+- `GET /r`：记录点击事件，然后 302 到 `dest`。
+- `GET /qrcode.png`：记录二维码图片加载事件，返回二维码 PNG。
+- `GET /api/stats`：返回匿名聚合统计。
+- `GET /api/events`：返回匿名事件列表，供本地系统拉取导入。
 
-模板变量会渲染为：
+## URL 契约
+
+打开像素：
 
 ```html
-<img src="https://track.example.com/api/track/qrcode.png?token=..." width="132" height="132" />
+<img src="https://track.example.com/p?c=123&rid=random-token" width="1" height="1" alt="" />
 ```
 
-图片被邮件客户端加载时，tracker 记录一条 `tracking_mark_events`。如果图片服务部署在云端，云端只需要保存触发列表，例如：
+点击重定向：
+
+```html
+<a href="https://track.example.com/r?c=123&l=hero&rid=random-token&dest=https%3A%2F%2Fexample.com">
+  查看详情
+</a>
+```
+
+二维码图片：
+
+```html
+<img src="https://track.example.com/qrcode.png?token=random-token&target=https%3A%2F%2Fexample.com%2Fsurvey" />
+```
+
+参数含义：
+
+| 参数 | 含义 |
+| :--- | :--- |
+| `c` / `campaign` | 用户本地生成的 campaign id |
+| `l` / `link` | 用户本地生成的 link id |
+| `rid` / `token` | 用户本地生成的随机匿名 token |
+| `s` / `source` | 可选，用户或租户前缀 |
+| `dest` | 点击事件的最终跳转地址，仅允许 http/https |
+| `target` | 二维码 PNG 中编码的目标地址，仅允许 http/https |
+
+## 匿名事件查询
+
+聚合统计：
+
+```text
+GET /api/stats?source=user123&campaign=456&event=open&since=2026-06-01T00:00:00Z
+```
+
+事件拉取：
+
+```text
+GET /api/events?source=user123&campaign=456&after_id=1000&limit=500
+```
+
+返回事件示例：
 
 ```json
 {
-  "token": "mark-token",
-  "kind": "qrcode",
-  "triggered_at": "2026-06-09T10:00:00Z",
-  "ip": "203.0.113.1",
-  "user_agent": "...",
-  "referer": "",
-  "accept_language": "zh-CN,zh;q=0.9"
+  "events": [
+    {
+      "id": 1001,
+      "source": "user123",
+      "campaign": "456",
+      "link": "hero",
+      "token": "random-token",
+      "kind": "click",
+      "triggered_at": "2026-06-09 10:30:00"
+    }
+  ]
 }
 ```
 
-本地通过下面接口导入云端事件，再用 token 和本地 `tracking_marks` / `campaign_recipients` 做比对分析：
+本地系统可以把事件 POST 到：
 
 ```text
 POST /api/tracking/cloud-events/import
 ```
 
-这样云端不需要保存公司名单、邮箱、联系人等敏感信息，只保存不可读的 token 触发记录。
+请求体：
 
-## 现在能收集到的信息
-
-二维码图片请求发生时，本地后端或云端 tracker 可以收集：
-
-- `token`：不可读的二维码埋点 token，用来回连本地 `tracking_marks`
-- `kind`：当前为 `qrcode`
-- `triggered_at`：二维码图片被请求的时间
-- `ip`：请求来源 IP，可能是邮件客户端代理或安全网关 IP
-- `user_agent`：请求 UA，可能是邮件客户端、图片代理或安全扫描器
-- `referer`：通常为空，但保留字段
-- `accept_language`：请求语言，可辅助判断环境
-- `is_prefetch`：基于 UA 的弱判断，当前识别 Google image proxy 和 Apple Mail 类请求
-- `raw_payload`：云端或本地保留的原始事件 JSON，方便后续补充解析
-
-不建议把这个事件直接命名为“真实查看”。产品侧更准确的口径是：
-
-```text
-二维码加载时间 / 正文图片加载时间 / 内容加载推测
+```json
+{
+  "events": [
+    {
+      "token": "random-token",
+      "kind": "open",
+      "triggered_at": "2026-06-09T10:30:00Z"
+    }
+  ]
+}
 ```
 
-## 统计服务器和后台交互
-
-推荐生产部署采用“两层”模式：
-
-```text
-邮件客户端
-  -> 公网 tracker: GET /api/track/qrcode.png?token=...
-  -> tracker 立即返回二维码 PNG，并异步记录事件
-  -> 后台定时或手动调用 POST /api/tracking/cloud-events/import 导入事件
-  -> 后台用 token 关联 campaign_recipient，生成任务统计和收件人明细
-```
-
-交互契约：
-
-1. 后台发送邮件前，为每个收件人的二维码生成 `tracking_marks.token`。
-2. 邮件正文里的 `{{.QRCode}}` 渲染为 tracker 的二维码图片 URL。
-3. tracker 不保存邮箱、联系人、公司名，只保存 token 和请求环境。
-4. tracker 需要尽快返回图片，事件写入可以同步写本地表、队列或日志。
-5. 后台导入事件后，通过 `token -> tracking_marks -> campaign_recipients` 做归因。
-6. 后台 API `GET /api/campaigns/:id/stats` 返回普通像素趋势和二维码加载趋势。
-7. 后台 API `GET /api/campaigns/:id/recipients` 返回每个收件人的二维码加载次数、首次加载、最近加载和最近 IP/UA。
+导入后，本地系统用 `token -> campaign_recipients.tracking_id` 或 `token -> tracking_marks.token` 做本地归因。这个映射只存在用户本地。
 
 ## 注意
 
-阅读追踪只能说明“图片被请求过”，不等于真人一定阅读。Apple Mail、Gmail 图片代理、安全网关都可能预加载或代理请求。
+- 打开事件只表示图片被请求，不等于真人阅读。
+- 邮箱客户端、安全网关和图片代理可能产生预加载。
+- 云端默认保存 IP/UA 作为事件环境字段；如果生产环境希望更严格匿名，可以在 `tracking-server/internal/trackingcloud` 中去掉这些字段或改成短期哈希。
+- 写入端点是公开的，生产环境应在网关层加速率限制、预算告警和域名防滥用策略。

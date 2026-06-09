@@ -93,7 +93,7 @@ onMounted(load)
     <div class="page-head">
       <div>
         <h1>邮件任务</h1>
-        <p class="muted">创建市场调查、通知、邀约邮件，并自动生成阅读追踪。</p>
+        <p class="muted">创建市场调查、通知、邀约邮件，并自动生成匿名埋点。</p>
       </div>
     </div>
 

@@ -5,21 +5,29 @@ import (
 	"crypto/tls"
 	"html/template"
 
-	"nousmail/internal/models"
+	"nousmail/pkg/models"
 
 	"gopkg.in/gomail.v2"
 )
 
 type Personalization struct {
-	BaseURL   string
-	Contact   models.Contact
-	Recipient models.Recipient
-	Campaign  models.Campaign
-	QRCode    template.HTML
+	BaseURL       string
+	Contact       models.Contact
+	Recipient     models.Recipient
+	Campaign      models.Campaign
+	QRCode        template.HTML
+	TrackingImage func(asset string) template.HTML
 }
 
 func RenderBody(body string, data Personalization) (string, error) {
-	tpl, err := template.New("mail").Parse(body)
+	tpl, err := template.New("mail").Funcs(template.FuncMap{
+		"TrackingImage": func(asset string) template.HTML {
+			if data.TrackingImage == nil {
+				return ""
+			}
+			return data.TrackingImage(asset)
+		},
+	}).Parse(body)
 	if err != nil {
 		return "", err
 	}

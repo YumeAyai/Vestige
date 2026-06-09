@@ -24,10 +24,12 @@ type Contact struct {
 }
 
 type Template struct {
-	ID       int64  `json:"id"`
-	Name     string `json:"name"`
-	Subject  string `json:"subject"`
-	BodyHTML string `json:"body_html"`
+	ID        int64  `json:"id"`
+	Name      string `json:"name"`
+	Subject   string `json:"subject"`
+	BodyHTML  string `json:"body_html"`
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 type Campaign struct {

@@ -22,6 +22,7 @@ func Open(path string) (*sql.DB, error) {
 }
 
 func Migrate(conn *sql.DB) error {
+	var err error
 	schema := `
 CREATE TABLE IF NOT EXISTS mailboxes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,7 +54,8 @@ CREATE TABLE IF NOT EXISTS templates (
   name TEXT NOT NULL,
   subject TEXT NOT NULL,
   body_html TEXT NOT NULL,
-  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS campaigns (
@@ -122,14 +124,39 @@ CREATE TABLE IF NOT EXISTS tracking_mark_events (
   raw_payload TEXT NOT NULL DEFAULT '',
   triggered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(mark_id) REFERENCES tracking_marks(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS campaign_variants (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  campaign_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  body_html TEXT NOT NULL,
+  weight INTEGER NOT NULL DEFAULT 50,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
 );`
 	if _, err := conn.Exec(schema); err != nil {
 		return err
 	}
-	return addColumns(conn, "tracking_mark_events", map[string]string{
+	err = addColumns(conn, "tracking_mark_events", map[string]string{
 		"referer":         "TEXT NOT NULL DEFAULT ''",
 		"accept_language": "TEXT NOT NULL DEFAULT ''",
 		"is_prefetch":     "INTEGER NOT NULL DEFAULT 0",
+	})
+	if err != nil {
+		return err
+	}
+	if err := addColumns(conn, "templates", map[string]string{
+		"updated_at": "DATETIME NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if _, err := conn.Exec(`UPDATE templates SET updated_at=COALESCE(NULLIF(updated_at,''),created_at,CURRENT_TIMESTAMP) WHERE updated_at=''`); err != nil {
+		return err
+	}
+	return addColumns(conn, "campaign_recipients", map[string]string{
+		"variant_id": "INTEGER",
 	})
 }
 

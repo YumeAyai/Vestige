@@ -18,7 +18,7 @@ const completed = computed(() => campaigns.value.filter((item) => item.status ==
     <div class="page-head">
       <div>
         <h1>工作台</h1>
-        <p class="muted">面向市场调查、通知、邀约的批量邮件发送与阅读追踪。</p>
+        <p class="muted">面向市场调查、通知、邀约的批量邮件发送与匿名埋点。</p>
       </div>
       <RouterLink class="button" to="/campaigns">新建邮件任务</RouterLink>
     </div>

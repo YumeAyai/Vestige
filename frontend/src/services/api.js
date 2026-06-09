@@ -25,11 +25,37 @@ export const api = {
   },
   templates: () => request('/api/templates'),
   createTemplate: (data) => request('/api/templates', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
+  updateTemplate: (id, data) => request(`/api/templates/${id}`, { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(data) }),
+  deleteTemplate: (id) => request(`/api/templates/${id}`, { method: 'DELETE' }),
+  copyTemplate: (id) => request(`/api/templates/${id}/copy`, { method: 'POST' }),
   previewTemplate: (data) => request('/api/templates/preview', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
+  uploadTrackingImageAsset: (file, data = {}) => {
+    const form = new FormData()
+    form.append('file', file)
+    form.append('label', data.label || '')
+    form.append('width', data.width || 176)
+    return request('/api/templates/qrcode-asset', { method: 'POST', body: form })
+  },
   campaigns: () => request('/api/campaigns'),
   createCampaign: (data) => request('/api/campaigns', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
   campaign: (id) => request(`/api/campaigns/${id}`),
   campaignStats: (id) => request(`/api/campaigns/${id}/stats`),
   recipients: (id) => request(`/api/campaigns/${id}/recipients`),
-  sendCampaign: (id) => request(`/api/campaigns/${id}/send`, { method: 'POST', headers: { 'X-Base-URL': location.origin } })
+  sendCampaign: (id) => request(`/api/campaigns/${id}/send`, { method: 'POST', headers: { 'X-Base-URL': location.origin } }),
+  // AB Testing
+  createVariant: (campaignId, data) => request(`/api/campaigns/${campaignId}/variants`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
+  updateVariant: (campaignId, variantId, data) => request(`/api/campaigns/${campaignId}/variants/${variantId}`, { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(data) }),
+  deleteVariant: (campaignId, variantId) => request(`/api/campaigns/${campaignId}/variants/${variantId}`, { method: 'DELETE' }),
+  abStats: (id) => request(`/api/campaigns/${id}/ab-stats`),
+  // Links
+  links: (id) => request(`/api/campaigns/${id}/links`),
+  linkStats: (campaignId, linkId) => request(`/api/campaigns/${campaignId}/links/${linkId}/stats`),
+  // Global stats
+  globalStats: ({ since = '', campaign = '' } = {}) => {
+    const params = new URLSearchParams()
+    if (since) params.set('since', since)
+    if (campaign) params.set('campaign', campaign)
+    const query = params.toString() ? `?${params.toString()}` : ''
+    return request(`/api/stats${query}`)
+  }
 }

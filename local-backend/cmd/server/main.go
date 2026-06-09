@@ -2,9 +2,9 @@ package main
 
 import (
 	"log"
-	"nousmail/internal/app"
-	"nousmail/internal/db"
-	"nousmail/internal/webui"
+	"nousmail/local-backend/internal/app"
+	"nousmail/local-backend/internal/webui"
+	"nousmail/pkg/db"
 )
 
 func main() {

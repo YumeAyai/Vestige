@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"html/template"
+	"io"
 	"io/fs"
 	"mime"
+	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,9 +18,9 @@ import (
 	"strings"
 	"time"
 
-	"nousmail/internal/mailer"
-	"nousmail/internal/models"
-	"nousmail/internal/tracker"
+	"nousmail/local-backend/internal/mailer"
+	"nousmail/pkg/models"
+	"nousmail/pkg/tracker"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -28,15 +30,15 @@ import (
 type Server struct {
 	db       *sql.DB
 	frontend fs.FS
-	tracker  tracker.SQLiteRecorder
 }
 
 func New(db *sql.DB, frontend fs.FS) *gin.Engine {
-	s := &Server{db: db, frontend: frontend, tracker: tracker.NewSQLiteRecorder(db)}
+	s := &Server{db: db, frontend: frontend}
 	r := gin.Default()
 
 	api := r.Group("/api")
 	api.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
+	r.GET("/qrcode.png", s.trackingImage)
 
 	api.GET("/mailboxes", s.listMailboxes)
 	api.POST("/mailboxes", s.createMailbox)
@@ -49,6 +51,10 @@ func New(db *sql.DB, frontend fs.FS) *gin.Engine {
 	api.POST("/contacts/import", s.importContacts)
 	api.GET("/templates", s.listTemplates)
 	api.POST("/templates", s.createTemplate)
+	api.PATCH("/templates/:id", s.updateTemplate)
+	api.DELETE("/templates/:id", s.deleteTemplate)
+	api.POST("/templates/:id/copy", s.copyTemplate)
+	api.POST("/templates/qrcode-asset", s.createTemplateQRCodeAsset)
 	api.POST("/templates/preview", s.previewTemplate)
 	api.GET("/campaigns", s.listCampaigns)
 	api.POST("/campaigns", s.createCampaign)
@@ -57,8 +63,13 @@ func New(db *sql.DB, frontend fs.FS) *gin.Engine {
 	api.GET("/campaigns/:id/stats", s.campaignStats)
 	api.GET("/campaigns/:id/recipients", s.listRecipients)
 	api.GET("/campaigns/:id/export.csv", s.exportCampaignCSV)
-	api.GET("/track/open.gif", s.trackOpen)
-	api.GET("/track/qrcode.png", s.trackQRCode)
+	api.POST("/campaigns/:id/variants", s.createVariant)
+	api.PATCH("/campaigns/:id/variants/:vid", s.updateVariant)
+	api.DELETE("/campaigns/:id/variants/:vid", s.deleteVariant)
+	api.GET("/campaigns/:id/ab-stats", s.abStats)
+	api.GET("/campaigns/:id/links", s.listLinks)
+	api.GET("/campaigns/:id/links/:lid/stats", s.linkStats)
+	api.GET("/stats", s.globalStats)
 	api.POST("/tracking/cloud-events/import", s.importCloudTrackingEvents)
 
 	dist, err := fs.Sub(frontend, "dist")
@@ -345,7 +356,7 @@ func (s *Server) importContacts(c *gin.Context) {
 }
 
 func (s *Server) listTemplates(c *gin.Context) {
-	rows, err := s.db.Query(`SELECT id,name,subject,body_html FROM templates ORDER BY id DESC`)
+	rows, err := s.db.Query(`SELECT id,name,subject,body_html,created_at,updated_at FROM templates ORDER BY updated_at DESC,id DESC`)
 	if err != nil {
 		fail(c, err)
 		return
@@ -354,7 +365,7 @@ func (s *Server) listTemplates(c *gin.Context) {
 	items := []models.Template{}
 	for rows.Next() {
 		var item models.Template
-		if err := rows.Scan(&item.ID, &item.Name, &item.Subject, &item.BodyHTML); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Subject, &item.BodyHTML, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			fail(c, err)
 			return
 		}
@@ -377,10 +388,100 @@ func (s *Server) createTemplate(c *gin.Context) {
 	c.JSON(http.StatusCreated, input)
 }
 
+func (s *Server) updateTemplate(c *gin.Context) {
+	id := c.Param("id")
+	var input models.Template
+	if bind(c, &input) != nil {
+		return
+	}
+	res, err := s.db.Exec(`UPDATE templates SET name=?,subject=?,body_html=?,updated_at=CURRENT_TIMESTAMP WHERE id=?`, input.Name, input.Subject, input.BodyHTML, id)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	input.ID, _ = strconv.ParseInt(id, 10, 64)
+	c.JSON(http.StatusOK, input)
+}
+
+func (s *Server) deleteTemplate(c *gin.Context) {
+	res, err := s.db.Exec(`DELETE FROM templates WHERE id=?`, c.Param("id"))
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": true})
+}
+
+func (s *Server) copyTemplate(c *gin.Context) {
+	var item models.Template
+	if err := s.db.QueryRow(`SELECT name,subject,body_html FROM templates WHERE id=?`, c.Param("id")).Scan(&item.Name, &item.Subject, &item.BodyHTML); err != nil {
+		fail(c, err)
+		return
+	}
+	item.Name = item.Name + " 副本"
+	res, err := s.db.Exec(`INSERT INTO templates(name,subject,body_html) VALUES(?,?,?)`, item.Name, item.Subject, item.BodyHTML)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	item.ID, _ = res.LastInsertId()
+	c.JSON(http.StatusCreated, item)
+}
+
 type previewTemplateInput struct {
 	Subject  string         `json:"subject"`
 	BodyHTML string         `json:"body_html"`
 	Contact  models.Contact `json:"contact"`
+}
+
+func (s *Server) createTemplateQRCodeAsset(c *gin.Context) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请上传企业微信二维码图片"})
+		return
+	}
+	contentType := file.Header.Get("Content-Type")
+	ext := strings.ToLower(filepath.Ext(file.Filename))
+	if ext == "" {
+		ext = imageExt(contentType)
+	}
+	if !allowedTrackingImageExt(ext) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "仅支持 PNG、JPG、GIF 或 WebP 图片"})
+		return
+	}
+	width := queryInt(c, "width", 0)
+	if width == 0 {
+		width, _ = strconv.Atoi(strings.TrimSpace(c.PostForm("width")))
+	}
+	if width <= 0 {
+		width = 176
+	}
+	if width < 96 {
+		width = 96
+	}
+	if width > 480 {
+		width = 480
+	}
+	label := strings.TrimSpace(c.PostForm("label"))
+	if label == "" {
+		label = "企业微信二维码"
+	}
+	payload, err := forwardTrackingAsset(trackingBaseURL(c), file, label, width)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, payload)
 }
 
 func (s *Server) previewTemplate(c *gin.Context) {
@@ -404,6 +505,9 @@ func (s *Server) previewTemplate(c *gin.Context) {
 		BaseURL: trackingBaseURL(c),
 		Contact: input.Contact,
 		QRCode:  template.HTML(tracker.QRCodeHTML(trackingBaseURL(c), "preview")),
+		TrackingImage: func(asset string) template.HTML {
+			return template.HTML(tracker.TrackingImageHTML(trackingBaseURL(c), "preview", asset, "企业微信二维码", 176))
+		},
 	})
 	if err != nil {
 		fail(c, err)
@@ -415,6 +519,67 @@ func (s *Server) previewTemplate(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"subject": subject, "body_html": body})
+}
+
+func (s *Server) trackingImage(c *gin.Context) {
+	token := strings.TrimSpace(firstNonEmpty(c.Query("token"), c.Query("rid")))
+	if token != "" && token != "preview" {
+		raw, _ := json.Marshal(gin.H{
+			"token":           token,
+			"kind":            "qrcode",
+			"asset":           c.Query("asset"),
+			"ip":              c.ClientIP(),
+			"user_agent":      c.GetHeader("User-Agent"),
+			"referer":         c.GetHeader("Referer"),
+			"accept_language": c.GetHeader("Accept-Language"),
+			"forwarded_for":   c.GetHeader("X-Forwarded-For"),
+		})
+		_ = tracker.NewSQLiteRecorder(s.db).RecordMark(tracker.MarkEvent{
+			Token:          token,
+			Kind:           "qrcode",
+			Source:         "local",
+			IP:             c.ClientIP(),
+			UserAgent:      c.GetHeader("User-Agent"),
+			Referer:        c.GetHeader("Referer"),
+			AcceptLanguage: c.GetHeader("Accept-Language"),
+			Raw:            string(raw),
+		})
+	}
+
+	asset := strings.TrimSpace(c.Query("asset"))
+	if asset != "" {
+		name := filepath.Base(asset)
+		if name != asset {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		path := filepath.Join("data", "tracking-assets", name)
+		if _, err := os.Stat(path); err != nil {
+			c.Status(http.StatusNotFound)
+			return
+		}
+		contentType := mime.TypeByExtension(filepath.Ext(name))
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		c.Header("Content-Type", contentType)
+		c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+		c.File(path)
+		return
+	}
+
+	target := strings.TrimSpace(c.Query("target"))
+	if target == "" || !validHTTPURL(target) {
+		target = qrcodeTargetURL(trackingBaseURL(c), token)
+	}
+	png, err := tracker.QRCodePNG(target, queryInt(c, "size", 176))
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	c.Header("Content-Type", "image/png")
+	c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+	c.Data(http.StatusOK, "image/png", png)
 }
 
 type createCampaignInput struct {
@@ -526,8 +691,9 @@ func (s *Server) sendCampaign(c *gin.Context) {
 		}
 		contact.ID, contact.Name, contact.Email = rec.ContactID, rec.Name, rec.Email
 		qrHTML := template.HTML("")
-		if templateUsesQRCode(campaign.BodyHTML) {
-			markToken, err := s.ensureTrackingMark(rec.ID, "qrcode", "QRCode", qrcodeTargetURL(baseURL, rec.TrackingID))
+		var markToken string
+		if templateUsesQRCode(campaign.BodyHTML) || templateUsesTrackingImage(campaign.BodyHTML) {
+			markToken, err = s.ensureTrackingMark(rec.ID, "qrcode", "联系二维码", "")
 			if err != nil {
 				_, _ = s.db.Exec(`UPDATE campaign_recipients SET send_status='failed',failure_reason=? WHERE id=?`, err.Error(), rec.ID)
 				failed++
@@ -535,7 +701,16 @@ func (s *Server) sendCampaign(c *gin.Context) {
 			}
 			qrHTML = template.HTML(tracker.QRCodeHTML(baseURL, markToken))
 		}
-		data := mailer.Personalization{BaseURL: baseURL, Contact: contact, Recipient: rec, Campaign: campaign, QRCode: qrHTML}
+		data := mailer.Personalization{
+			BaseURL:   baseURL,
+			Contact:   contact,
+			Recipient: rec,
+			Campaign:  campaign,
+			QRCode:    qrHTML,
+			TrackingImage: func(asset string) template.HTML {
+				return template.HTML(tracker.TrackingImageHTML(baseURL, markToken, asset, "企业微信二维码", 176))
+			},
+		}
 		subject, err := mailer.RenderBody(campaign.Subject, data)
 		if err != nil {
 			_, _ = s.db.Exec(`UPDATE campaign_recipients SET send_status='failed',failure_reason=? WHERE id=?`, err.Error(), rec.ID)
@@ -544,10 +719,10 @@ func (s *Server) sendCampaign(c *gin.Context) {
 		}
 		body, err := mailer.RenderBody(campaign.BodyHTML, data)
 		if err == nil && campaign.TrackingEnabled {
-			body = tracker.InjectPixel(body, baseURL, rec.TrackingID)
+			body = tracker.InjectPixel(body, baseURL, rec.TrackingID, strconv.FormatInt(campaign.ID, 10))
 		}
 		if err == nil {
-			err = mailer.Send(mb, rec.Email, rec.Name, subject, body)
+			err = sendMailWithTimeout(mb, rec.Email, rec.Name, subject, body, 20*time.Second)
 		}
 		if err != nil {
 			failed++
@@ -691,58 +866,8 @@ func (s *Server) listRecipients(c *gin.Context) {
 	c.JSON(http.StatusOK, items)
 }
 
-func (s *Server) trackOpen(c *gin.Context) {
-	tid := c.Query("tid")
-	if tid != "" {
-		_ = s.tracker.RecordOpen(tracker.Event{
-			TrackingID: tid,
-			IP:         c.ClientIP(),
-			UserAgent:  c.GetHeader("User-Agent"),
-		})
-	}
-	c.Header("Content-Type", "image/gif")
-	c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-	c.Data(http.StatusOK, "image/gif", tracker.PixelGIF)
-}
-
-func (s *Server) trackQRCode(c *gin.Context) {
-	token := c.Query("token")
-	if token != "" && token != "preview" {
-		raw, _ := json.Marshal(gin.H{
-			"token":           token,
-			"kind":            "qrcode",
-			"ip":              c.ClientIP(),
-			"user_agent":      c.GetHeader("User-Agent"),
-			"referer":         c.GetHeader("Referer"),
-			"accept_language": c.GetHeader("Accept-Language"),
-			"forwarded_for":   c.GetHeader("X-Forwarded-For"),
-		})
-		_ = s.tracker.RecordMark(tracker.MarkEvent{
-			Token:          token,
-			Kind:           "qrcode",
-			Source:         "local",
-			IP:             c.ClientIP(),
-			UserAgent:      c.GetHeader("User-Agent"),
-			Referer:        c.GetHeader("Referer"),
-			AcceptLanguage: c.GetHeader("Accept-Language"),
-			Raw:            string(raw),
-		})
-	}
-	target := qrcodeTargetURL(trackingBaseURL(c), token)
-	if token == "preview" {
-		target = "https://example.com/survey"
-	}
-	png, err := tracker.QRCodePNG(target, 176)
-	if err != nil {
-		fail(c, err)
-		return
-	}
-	c.Header("Content-Type", "image/png")
-	c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
-	c.Data(http.StatusOK, "image/png", png)
-}
-
 type cloudTrackingEventInput struct {
+	ID             int64  `json:"id"`
 	Token          string `json:"token"`
 	Kind           string `json:"kind"`
 	TriggeredAt    string `json:"triggered_at"`
@@ -767,7 +892,7 @@ func (s *Server) importCloudTrackingEvents(c *gin.Context) {
 			continue
 		}
 		raw, _ := json.Marshal(event)
-		err := s.recordCloudMarkEvent(event, string(raw))
+		err := s.recordCloudTrackingEvent(event, string(raw))
 		if err != nil {
 			fail(c, err)
 			return
@@ -935,6 +1060,19 @@ func compactNotes(values map[string]string) string {
 	return strings.Join(parts, "；")
 }
 
+func sendMailWithTimeout(mb models.Mailbox, toEmail, toName, subject, body string, timeout time.Duration) error {
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- mailer.Send(mb, toEmail, toName, subject, body)
+	}()
+	select {
+	case err := <-errCh:
+		return err
+	case <-time.After(timeout):
+		return errors.New("发送超时，请检查 SMTP 主机、端口、TLS 设置或网络连通性")
+	}
+}
+
 func closeRows(rows *sql.Rows) {
 	if rows != nil {
 		_ = rows.Close()
@@ -960,6 +1098,54 @@ func (s *Server) ensureTrackingMark(recipientID int64, kind, label, targetURL st
 		targetURL,
 	)
 	return token, err
+}
+
+func (s *Server) recordCloudTrackingEvent(event cloudTrackingEventInput, raw string) error {
+	if event.Kind == "open" {
+		return s.recordCloudOpenEvent(event, raw)
+	}
+	return s.recordCloudMarkEvent(event, raw)
+}
+
+func (s *Server) recordCloudOpenEvent(event cloudTrackingEventInput, _ string) error {
+	var recipientID int64
+	if err := s.db.QueryRow(`SELECT id FROM campaign_recipients WHERE tracking_id=?`, event.Token).Scan(&recipientID); err != nil {
+		return err
+	}
+	triggeredAt := strings.TrimSpace(event.TriggeredAt)
+	if triggeredAt == "" {
+		_, err := s.db.Exec(
+			`INSERT INTO open_events(campaign_recipient_id,tracking_id,ip,user_agent,is_prefetch) VALUES(?,?,?,?,?)`,
+			recipientID,
+			event.Token,
+			event.IP,
+			event.UserAgent,
+			tracker.LooksLikePrefetch(event.UserAgent),
+		)
+		if err != nil {
+			return err
+		}
+	} else {
+		_, err := s.db.Exec(
+			`INSERT INTO open_events(campaign_recipient_id,tracking_id,ip,user_agent,is_prefetch,opened_at) VALUES(?,?,?,?,?,?)`,
+			recipientID,
+			event.Token,
+			event.IP,
+			event.UserAgent,
+			tracker.LooksLikePrefetch(event.UserAgent),
+			triggeredAt,
+		)
+		if err != nil {
+			return err
+		}
+	}
+	_, err := s.db.Exec(
+		`UPDATE campaign_recipients SET open_count=open_count+1, first_opened_at=COALESCE(first_opened_at,?), last_opened_at=COALESCE(NULLIF(?,''),CURRENT_TIMESTAMP) WHERE id=?`,
+		firstNonEmpty(triggeredAt, time.Now().Format(time.RFC3339)),
+		triggeredAt,
+		recipientID,
+	)
+	return err
 }
 
 func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string) error {
@@ -1010,6 +1196,10 @@ func templateUsesQRCode(body string) bool {
 	return strings.Contains(body, ".QRCode")
 }
 
+func templateUsesTrackingImage(body string) bool {
+	return strings.Contains(body, "TrackingImage")
+}
+
 func serveEmbedded(c *gin.Context, dist fs.FS, path string) {
 	data, err := fs.ReadFile(dist, path)
 	if err != nil {
@@ -1033,7 +1223,18 @@ func trackingBaseURL(c *gin.Context) string {
 	if value := strings.TrimSpace(c.GetHeader("X-Base-URL")); value != "" {
 		return value
 	}
-	return "http://" + c.Request.Host
+	return "http://localhost:8081"
+}
+
+func appBaseURL(c *gin.Context) string {
+	if value := strings.TrimSpace(c.GetHeader("X-Base-URL")); value != "" {
+		return value
+	}
+	scheme := "http"
+	if c.Request.TLS != nil || strings.EqualFold(c.GetHeader("X-Forwarded-Proto"), "https") {
+		scheme = "https"
+	}
+	return scheme + "://" + c.Request.Host
 }
 
 func queryInt(c *gin.Context, key string, fallback int) int {
@@ -1048,7 +1249,7 @@ func queryInt(c *gin.Context, key string, fallback int) int {
 	return parsed
 }
 
-func qrcodeTargetURL(baseURL, token string) string {
+func qrcodeTargetURL(_ string, token string) string {
 	if value := strings.TrimSpace(os.Getenv("QR_CODE_TARGET_URL")); value != "" {
 		separator := "?"
 		if strings.Contains(value, "?") {
@@ -1056,5 +1257,325 @@ func qrcodeTargetURL(baseURL, token string) string {
 		}
 		return value + separator + "t=" + token
 	}
-	return strings.TrimRight(baseURL, "/") + "/q/" + token
+	return "https://example.com/survey?t=" + token
+}
+
+func validHTTPURL(value string) bool {
+	return strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://")
+}
+
+func imageExt(contentType string) string {
+	switch strings.ToLower(strings.TrimSpace(contentType)) {
+	case "image/png":
+		return ".png"
+	case "image/jpeg":
+		return ".jpg"
+	case "image/gif":
+		return ".gif"
+	case "image/webp":
+		return ".webp"
+	default:
+		return ""
+	}
+}
+
+func allowedTrackingImageExt(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".png", ".jpg", ".jpeg", ".gif", ".webp":
+		return true
+	default:
+		return false
+	}
+}
+
+func forwardTrackingAsset(baseURL string, file *multipart.FileHeader, label string, width int) (gin.H, error) {
+	src, err := file.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer src.Close()
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", file.Filename)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := io.Copy(part, src); err != nil {
+		return nil, err
+	}
+	if err := writer.WriteField("label", label); err != nil {
+		return nil, err
+	}
+	if err := writer.WriteField("width", strconv.Itoa(width)); err != nil {
+		return nil, err
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+
+	endpoint := strings.TrimRight(baseURL, "/") + "/api/assets"
+	req, err := http.NewRequest(http.MethodPost, endpoint, &body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	var payload gin.H
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		if message, ok := payload["error"].(string); ok && message != "" {
+			return nil, errors.New(message)
+		}
+		return nil, errors.New(res.Status)
+	}
+	return payload, nil
+}
+
+// globalStats returns global tracking statistics
+func (s *Server) globalStats(c *gin.Context) {
+	since := c.Query("since")
+	campaignID := c.Query("campaign")
+
+	var whereClause string
+	var args []interface{}
+	if since != "" || campaignID != "" {
+		conditions := []string{}
+		if since != "" {
+			conditions = append(conditions, "cr.sent_at >= ?")
+			args = append(args, since)
+		}
+		if campaignID != "" {
+			conditions = append(conditions, "cr.campaign_id = ?")
+			args = append(args, campaignID)
+		}
+		whereClause = "WHERE " + strings.Join(conditions, " AND ")
+	}
+
+	var stats struct {
+		TotalCampaigns int `json:"total_campaigns"`
+		TotalSent      int `json:"total_sent"`
+		TotalOpened    int `json:"total_opened"`
+		TotalClicked   int `json:"total_clicked"`
+		TotalQRLoaded  int `json:"total_qr_loaded"`
+	}
+	query := `
+		SELECT
+			(SELECT COUNT(*) FROM campaigns) total_campaigns,
+			COALESCE((SELECT COUNT(*) FROM campaign_recipients cr ` + whereClause + ` AND cr.send_status='sent'), 0) total_sent,
+			COALESCE((SELECT SUM(cr.open_count>0) FROM campaign_recipients cr ` + whereClause + `), 0) total_opened,
+			COALESCE((SELECT COUNT(DISTINCT tme.mark_id) FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id ` + strings.Replace(whereClause, "cr.", "cr1.", -1) + ` AND tme.kind='click'), 0) total_clicked,
+			COALESCE((SELECT COUNT(DISTINCT tm.id) FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id ` + strings.Replace(whereClause, "cr.", "cr2.", -1) + ` AND tme.kind='qrcode' AND tme.is_prefetch=0), 0) total_qr_loaded
+	`
+	_ = s.db.QueryRow(query, args...).Scan(&stats.TotalCampaigns, &stats.TotalSent, &stats.TotalOpened, &stats.TotalClicked, &stats.TotalQRLoaded)
+
+	// Get daily trend for last 30 days
+	rows, _ := s.db.Query(`
+		SELECT DATE(cr.sent_at) date,
+			COUNT(*) sent,
+			COALESCE(SUM(cr.open_count>0), 0) opened,
+			COALESCE((SELECT COUNT(*) FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id JOIN campaign_recipients cr2 ON cr2.id=tm.campaign_recipient_id WHERE DATE(cr2.sent_at)=DATE(cr.sent_at) AND tme.kind='click'), 0) clicked
+		FROM campaign_recipients cr
+		WHERE cr.send_status='sent' AND cr.sent_at >= DATE('now', '-30 days')
+		GROUP BY DATE(cr.sent_at)
+		ORDER BY date
+	`)
+	defer closeRows(rows)
+	trend := []gin.H{}
+	if rows != nil {
+		for rows.Next() {
+			var date string
+			var sent, opened, clicked int
+			_ = rows.Scan(&date, &sent, &opened, &clicked)
+			trend = append(trend, gin.H{"date": date, "sent": sent, "opened": opened, "clicked": clicked})
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"summary": stats, "trend": trend})
+}
+
+// createVariant creates a new campaign variant for AB testing
+func (s *Server) createVariant(c *gin.Context) {
+	campaignID := c.Param("id")
+	var input struct {
+		Name     string `json:"name"`
+		Subject  string `json:"subject"`
+		BodyHTML string `json:"body_html"`
+		Weight   int    `json:"weight"`
+	}
+	if bind(c, &input) != nil {
+		return
+	}
+	if input.Weight == 0 {
+		input.Weight = 50
+	}
+	res, err := s.db.Exec(`INSERT INTO campaign_variants(campaign_id,name,subject,body_html,weight) VALUES(?,?,?,?)`,
+		campaignID, input.Name, input.Subject, input.BodyHTML, input.Weight)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	id, _ := res.LastInsertId()
+	c.JSON(http.StatusCreated, gin.H{"id": id, "name": input.Name, "subject": input.Subject, "body_html": input.BodyHTML, "weight": input.Weight})
+}
+
+// updateVariant updates a campaign variant
+func (s *Server) updateVariant(c *gin.Context) {
+	campaignID := c.Param("id")
+	variantID := c.Param("vid")
+	var input struct {
+		Name     string `json:"name"`
+		Subject  string `json:"subject"`
+		BodyHTML string `json:"body_html"`
+		Weight   int    `json:"weight"`
+	}
+	if bind(c, &input) != nil {
+		return
+	}
+	_, err := s.db.Exec(`UPDATE campaign_variants SET name=?, subject=?, body_html=?, weight=? WHERE id=? AND campaign_id=?`,
+		input.Name, input.Subject, input.BodyHTML, input.Weight, variantID, campaignID)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"updated": true})
+}
+
+// deleteVariant deletes a campaign variant
+func (s *Server) deleteVariant(c *gin.Context) {
+	campaignID := c.Param("id")
+	variantID := c.Param("vid")
+	_, err := s.db.Exec(`DELETE FROM campaign_variants WHERE id=? AND campaign_id=?`, variantID, campaignID)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": true})
+}
+
+// abStats returns AB testing statistics
+func (s *Server) abStats(c *gin.Context) {
+	campaignID := c.Param("id")
+
+	// Get variants
+	rows, err := s.db.Query(`SELECT id,name,subject,weight FROM campaign_variants WHERE campaign_id=?`, campaignID)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	defer rows.Close()
+	variants := []gin.H{}
+	for rows.Next() {
+		var id int
+		var name, subject string
+		var weight int
+		_ = rows.Scan(&id, &name, &subject, &weight)
+		variants = append(variants, gin.H{"id": id, "name": name, "subject": subject, "weight": weight})
+	}
+
+	// Get stats for each variant
+	results := []gin.H{}
+	for _, v := range variants {
+		vid := v["id"].(int)
+		var stats struct {
+			Sent     int `json:"sent"`
+			Opened   int `json:"opened"`
+			Clicked  int `json:"clicked"`
+			QRLoaded int `json:"qr_loaded"`
+		}
+		_ = s.db.QueryRow(`
+			SELECT
+				COALESCE(SUM(rg.send_status='sent'), 0),
+				COALESCE(SUM(rg.open_count>0), 0),
+				COALESCE((SELECT COUNT(*) FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id WHERE tm.campaign_recipient_id=rg.id AND tme.kind='click'), 0),
+				COALESCE((SELECT COUNT(*) FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id WHERE tm.campaign_recipient_id=rg.id AND tme.kind='qrcode' AND tme.is_prefetch=0), 0)
+			FROM campaign_recipients rg WHERE rg.campaign_id=? AND rg.variant_id=?`, campaignID, vid).
+			Scan(&stats.Sent, &stats.Opened, &stats.Clicked, &stats.QRLoaded)
+		results = append(results, gin.H{
+			"variant":    v,
+			"stats":      stats,
+			"open_rate":  safeRate(stats.Opened, stats.Sent),
+			"click_rate": safeRate(stats.Clicked, stats.Sent),
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"variants": results})
+}
+
+// listLinks lists all tracked links in a campaign
+func (s *Server) listLinks(c *gin.Context) {
+	campaignID := c.Param("id")
+	rows, err := s.db.Query(`
+		SELECT DISTINCT tm.id, tm.label, tm.target_url
+		FROM tracking_marks tm
+		JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id
+		WHERE cr.campaign_id=? AND tm.kind='click'
+		ORDER BY tm.label`, campaignID)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	defer rows.Close()
+	links := []gin.H{}
+	for rows.Next() {
+		var id int
+		var label, targetURL string
+		_ = rows.Scan(&id, &label, &targetURL)
+		links = append(links, gin.H{"id": id, "label": label, "target_url": targetURL})
+	}
+	c.JSON(http.StatusOK, links)
+}
+
+// linkStats returns statistics for a specific link
+func (s *Server) linkStats(c *gin.Context) {
+	campaignID := c.Param("id")
+	linkID := c.Param("lid")
+
+	var stats struct {
+		TotalClicks  int `json:"total_clicks"`
+		UniqueClicks int `json:"unique_clicks"`
+	}
+	_ = s.db.QueryRow(`
+		SELECT
+			COUNT(*),
+			COUNT(DISTINCT tme.ip || tme.user_agent)
+		FROM tracking_mark_events tme
+		JOIN tracking_marks tm ON tm.id=tme.mark_id
+		JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id
+		WHERE cr.campaign_id=? AND tm.id=? AND tme.kind='click'`, campaignID, linkID).
+		Scan(&stats.TotalClicks, &stats.UniqueClicks)
+
+	rows, _ := s.db.Query(`
+		SELECT strftime('%Y-%m-%d %H:00', tme.triggered_at) hour, COUNT(*)
+		FROM tracking_mark_events tme
+		JOIN tracking_marks tm ON tm.id=tme.mark_id
+		JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id
+		WHERE cr.campaign_id=? AND tm.id=? AND tme.kind='click'
+		GROUP BY hour
+		ORDER BY hour`, campaignID, linkID)
+	defer closeRows(rows)
+	trend := []gin.H{}
+	if rows != nil {
+		for rows.Next() {
+			var hour string
+			var count int
+			_ = rows.Scan(&hour, &count)
+			trend = append(trend, gin.H{"hour": hour, "count": count})
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"summary": stats, "trend": trend})
+}
+
+func safeRate(count, total int) float64 {
+	if total == 0 {
+		return 0
+	}
+	return float64(count) / float64(total) * 100
 }

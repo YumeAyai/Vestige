@@ -22,8 +22,8 @@ watch(
         </svg>
       </button>
       <div class="mobile-title">
-        <strong>Nous Mail</strong>
-        <span>调研邮件监控</span>
+        <strong>见迹</strong>
+        <span>匿名邮件埋点</span>
       </div>
     </header>
     <button
@@ -35,15 +35,16 @@ watch(
     ></button>
     <aside class="sidebar" :aria-hidden="!drawerOpen">
       <div class="brand">
-        <span class="mark">N</span>
+        <span class="mark">见</span>
         <div>
-          <strong>Nous Mail</strong>
-          <small>调研邮件监控</small>
+          <strong>见迹</strong>
+          <small>匿名邮件埋点</small>
         </div>
       </div>
       <nav>
         <RouterLink to="/">总览</RouterLink>
         <RouterLink to="/campaigns">邮件任务</RouterLink>
+        <RouterLink to="/stats">追踪统计</RouterLink>
         <RouterLink to="/contacts">联系人</RouterLink>
         <RouterLink to="/templates">模板</RouterLink>
         <RouterLink to="/mailboxes">发件邮箱</RouterLink>

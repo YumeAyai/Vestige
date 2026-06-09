@@ -9,6 +9,7 @@ const importing = ref(false)
 const total = ref(0)
 const offset = ref(0)
 const pageSize = ref(20)
+const pageSizeOptions = [20, 50, 100, 200, 'all']
 const query = ref('')
 const selectedIds = ref([])
 const batch = reactive({ tags: '', notes: '' })
@@ -88,10 +89,8 @@ function search() {
   load()
 }
 
-function changePageSize(size) {
-  pageSize.value = size
-  offset.value = 0
-  load()
+function getPageSizeLabel(size) {
+  return size === 'all' ? '全量' : size
 }
 
 function previousPage() {
@@ -219,7 +218,8 @@ onMounted(load)
         <strong>已选 {{ selectedIds.length }} / 本页 {{ items.length }}</strong>
         <input v-model="batch.tags" placeholder="批量设置标签" />
         <input v-model="batch.notes" placeholder="批量设置备注" />
-        <button class="secondary" :disabled="selectedIds.length === 0 || (!batch.tags && !batch.notes)" @click="applyBatchUpdate">批量更新</button>
+        <button class="secondary" :disabled="selectedIds.length === 0 || (!batch.tags && !batch.notes)"
+          @click="applyBatchUpdate">批量更新</button>
         <button class="secondary danger" :disabled="selectedIds.length === 0" @click="removeSelected">批量删除</button>
       </div>
       <p v-if="notice" class="notice success">{{ notice }}</p>
@@ -233,41 +233,29 @@ onMounted(load)
               <th v-for="column in columns" :key="column.key" class="resizable-th">
                 <span v-if="column.key !== 'select'">{{ column.label }}</span>
                 <input v-else class="contact-check" type="checkbox" :checked="allPageSelected" @change="togglePage" />
-                <button
-                  v-if="column.key !== 'select'"
-                  class="resize-handle"
-                  type="button"
-                  :aria-label="`调整${column.label}列宽`"
-                  @mousedown="startResize($event, column)"
-                  @touchstart="startResize($event, column)"
-                ></button>
+                <button v-if="column.key !== 'select'" class="resize-handle" type="button"
+                  :aria-label="`调整${column.label}列宽`" @mousedown="startResize($event, column)"
+                  @touchstart="startResize($event, column)"></button>
               </th>
             </tr>
           </thead>
           <tbody>
             <tr v-for="item in items" :key="item.id">
-              <td class="select-cell"><input class="contact-check" type="checkbox" :checked="isSelected(item.id)" @change="toggleOne(item.id)" /></td>
+              <td class="select-cell"><input class="contact-check" type="checkbox" :checked="isSelected(item.id)"
+                  @change="toggleOne(item.id)" /></td>
               <td class="company-cell">{{ item.company || item.name }}</td>
               <td>
                 <div class="chip-list">
-                  <span
-                    v-for="(email, index) in splitValues(item.email)"
-                    :key="email"
-                    class="data-chip"
-                    :class="`tone-${index % 5}`"
-                  >
+                  <span v-for="(email, index) in splitValues(item.email)" :key="email" class="data-chip"
+                    :class="`tone-${index % 5}`">
                     {{ email }}
                   </span>
                 </div>
               </td>
               <td>
                 <div class="chip-list">
-                  <span
-                    v-for="(phone, index) in splitValues(item.phone)"
-                    :key="phone"
-                    class="data-chip"
-                    :class="`tone-${(index + 2) % 5}`"
-                  >
+                  <span v-for="(phone, index) in splitValues(item.phone)" :key="phone" class="data-chip"
+                    :class="`tone-${(index + 2) % 5}`">
                     {{ phone }}
                   </span>
                 </div>
@@ -280,18 +268,12 @@ onMounted(load)
       </div>
       <div class="pager">
         <span>{{ pageStart }}-{{ pageEnd }} / {{ total }}</span>
-        <div class="page-size">
-          <button
-            v-for="size in [20, 50, 100, 200]"
-            :key="size"
-            class="secondary"
-            :class="{ active: pageSize === size }"
-            @click="changePageSize(size)"
-          >
-            {{ size }}
-          </button>
-        </div>
         <button class="secondary" :disabled="!hasPrevious" @click="previousPage">上一页</button>
+        <select v-model="pageSize" @change="offset = 0; load()">
+          <option v-for="size in pageSizeOptions" :key="size" :value="size === 'all' ? total : size">
+            {{ getPageSizeLabel(size) }}
+          </option>
+        </select>
         <button class="secondary" :disabled="!hasNext" @click="nextPage">下一页</button>
       </div>
     </div>
