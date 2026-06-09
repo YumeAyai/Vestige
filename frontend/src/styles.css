@@ -432,7 +432,7 @@ label {
 
 .grid.five.contact-form {
   align-items: end;
-  grid-template-columns: 1.2fr 1.2fr 0.9fr 0.9fr 1fr 120px;
+  grid-template-columns: 0.9fr 1.2fr 1.2fr 0.9fr 0.9fr 1fr 120px;
   margin-bottom: 14px;
 }
 
@@ -586,6 +586,11 @@ td a {
   font-weight: 760;
 }
 
+.person-cell {
+  color: #344054;
+  font-weight: 720;
+}
+
 .notes-cell {
   color: var(--muted);
   display: -webkit-box;
@@ -609,7 +614,7 @@ td a {
 }
 
 .contact-table {
-  min-width: 1080px;
+  min-width: 1240px;
   table-layout: fixed;
 }
 

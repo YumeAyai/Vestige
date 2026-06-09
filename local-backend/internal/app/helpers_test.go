@@ -3,6 +3,8 @@ package app
 import (
 	"strings"
 	"testing"
+
+	"nousmail/pkg/config"
 )
 
 func TestReadContactsCSVWithoutHeaderUsesFallbackColumns(t *testing.T) {
@@ -41,8 +43,9 @@ func TestTemplateMarkers(t *testing.T) {
 
 func TestQRCodeTargetURLUsesEnvAndChoosesSeparator(t *testing.T) {
 	t.Setenv("QR_CODE_TARGET_URL", "https://example.com/survey?src=email")
+	server := &Server{cfg: config.Default()}
 
-	got := qrcodeTargetURL("ignored", "token-1")
+	got := server.qrcodeTargetURL("token-1")
 	if got != "https://example.com/survey?src=email&t=token-1" {
 		t.Fatalf("unexpected target URL: %s", got)
 	}

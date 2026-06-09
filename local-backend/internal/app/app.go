@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"nousmail/local-backend/internal/mailer"
+	"nousmail/pkg/config"
 	"nousmail/pkg/models"
 	"nousmail/pkg/tracker"
 
@@ -33,6 +34,7 @@ import (
 type Server struct {
 	db               *sql.DB
 	frontend         fs.FS
+	cfg              config.Config
 	sendingCampaigns sync.Map
 	cloudSyncMu      sync.Mutex
 }
@@ -40,7 +42,11 @@ type Server struct {
 var cloudHTTPClient = &http.Client{Timeout: 2500 * time.Millisecond}
 
 func New(db *sql.DB, frontend fs.FS) *gin.Engine {
-	s := &Server{db: db, frontend: frontend}
+	return NewWithConfig(db, frontend, config.MustLoadDefault())
+}
+
+func NewWithConfig(db *sql.DB, frontend fs.FS, cfg config.Config) *gin.Engine {
+	s := &Server{db: db, frontend: frontend, cfg: cfg}
 	r := gin.Default()
 
 	api := r.Group("/api")
@@ -506,7 +512,7 @@ func (s *Server) createTemplateQRCodeAsset(c *gin.Context) {
 	if label == "" {
 		label = "企业微信二维码"
 	}
-	payload, err := forwardTrackingAsset(trackingBaseURL(c), file, label, width)
+	payload, err := forwardTrackingAsset(s.trackingBaseURL(c), file, label, width)
 	if err != nil {
 		fail(c, err)
 		return
@@ -532,11 +538,11 @@ func (s *Server) previewTemplate(c *gin.Context) {
 		input.Contact.Phone = "021-00000000"
 	}
 	body, err := mailer.RenderBody(input.BodyHTML, mailer.Personalization{
-		BaseURL: trackingBaseURL(c),
+		BaseURL: s.trackingBaseURL(c),
 		Contact: input.Contact,
-		QRCode:  template.HTML(tracker.QRCodeHTML(trackingBaseURL(c), "preview")),
+		QRCode:  template.HTML(tracker.QRCodeHTML(s.trackingBaseURL(c), "preview")),
 		TrackingImage: func(asset string) template.HTML {
-			return template.HTML(tracker.TrackingImageHTML(trackingBaseURL(c), "preview", asset, "企业微信二维码", 176))
+			return template.HTML(tracker.TrackingImageHTML(s.trackingBaseURL(c), "preview", asset, "企业微信二维码", 176))
 		},
 	})
 	if err != nil {
@@ -601,7 +607,7 @@ func (s *Server) trackingImage(c *gin.Context) {
 
 	target := strings.TrimSpace(c.Query("target"))
 	if target == "" || !validHTTPURL(target) {
-		target = qrcodeTargetURL(trackingBaseURL(c), token)
+		target = s.qrcodeTargetURL(token)
 	}
 	png, err := tracker.QRCodePNG(target, queryInt(c, "size", 176))
 	if err != nil {
@@ -711,7 +717,7 @@ func (s *Server) sendCampaign(c *gin.Context) {
 		c.Status(http.StatusAccepted)
 		return
 	}
-	baseURL := trackingBaseURL(c)
+	baseURL := s.trackingBaseURL(c)
 	sourceToken := s.trackingSourceToken()
 	_, _ = s.db.Exec(`UPDATE campaigns SET status='sending' WHERE id=?`, campaignID)
 	go s.runCampaignSend(campaignID, baseURL, sourceToken)
@@ -1137,7 +1143,7 @@ func (s *Server) importCloudTrackingEvents(c *gin.Context) {
 }
 
 func (s *Server) syncCloudTrackingEventsHandler(c *gin.Context) {
-	result, err := s.syncCloudTrackingEvents(c.Request.Context(), trackingBaseURL(c), s.trackingSourceToken())
+	result, err := s.syncCloudTrackingEvents(c.Request.Context(), s.trackingBaseURL(c), s.trackingSourceToken())
 	if err != nil {
 		fail(c, err)
 		return
@@ -1261,7 +1267,7 @@ func cloudEventsURL(baseURL, sourceToken string, afterID int64, limit int) (stri
 func (s *Server) syncCloudTrackingEventsBestEffort(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
 	defer cancel()
-	_, _ = s.syncCloudTrackingEvents(ctx, trackingBaseURL(c), s.trackingSourceToken())
+	_, _ = s.syncCloudTrackingEvents(ctx, s.trackingBaseURL(c), s.trackingSourceToken())
 }
 
 func (s *Server) exportCampaignCSV(c *gin.Context) {
@@ -1579,7 +1585,7 @@ func serveEmbedded(c *gin.Context, dist fs.FS, path string) {
 	c.Data(http.StatusOK, contentType, data)
 }
 
-func trackingBaseURL(c *gin.Context) string {
+func (s *Server) trackingBaseURL(c *gin.Context) string {
 	if value := strings.TrimSpace(os.Getenv("TRACKING_BASE_URL")); value != "" {
 		return value
 	}
@@ -1589,11 +1595,17 @@ func trackingBaseURL(c *gin.Context) string {
 	if value := strings.TrimSpace(c.GetHeader("X-Base-URL")); value != "" {
 		return value
 	}
+	if value := strings.TrimSpace(s.cfg.LocalBackend.TrackingBaseURL); value != "" {
+		return value
+	}
 	return "http://localhost:8081"
 }
 
 func (s *Server) trackingSourceToken() string {
 	if value := strings.TrimSpace(os.Getenv("TRACKING_SOURCE_TOKEN")); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(s.cfg.LocalBackend.TrackingSourceToken); value != "" {
 		return value
 	}
 	var token string
@@ -1637,7 +1649,7 @@ func queryInt(c *gin.Context, key string, fallback int) int {
 	return parsed
 }
 
-func qrcodeTargetURL(_ string, token string) string {
+func (s *Server) qrcodeTargetURL(token string) string {
 	if value := strings.TrimSpace(os.Getenv("QR_CODE_TARGET_URL")); value != "" {
 		separator := "?"
 		if strings.Contains(value, "?") {
@@ -1645,7 +1657,15 @@ func qrcodeTargetURL(_ string, token string) string {
 		}
 		return value + separator + "t=" + token
 	}
-	return "https://example.com/survey?t=" + token
+	value := strings.TrimSpace(s.cfg.LocalBackend.QRCodeTargetURL)
+	if value == "" {
+		value = "https://example.com/survey"
+	}
+	separator := "?"
+	if strings.Contains(value, "?") {
+		separator = "&"
+	}
+	return value + separator + "t=" + token
 }
 
 func validHTTPURL(value string) bool {

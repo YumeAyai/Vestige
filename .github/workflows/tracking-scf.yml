@@ -14,7 +14,7 @@ permissions:
 
 env:
   SCF_PACKAGE: tracking-scf.zip
-  SCF_BINARY: bootstrap
+  SCF_BINARY: main
 
 jobs:
   package:
@@ -74,4 +74,3 @@ jobs:
             --Namespace "${SCF_NAMESPACE:-default}" \
             --Handler "$SCF_BINARY" \
             --ZipFile "fileb://$SCF_PACKAGE"
-

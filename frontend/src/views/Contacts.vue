@@ -17,7 +17,8 @@ const notice = ref('')
 const form = reactive({ name: '', email: '', company: '', department: '', phone: '', tags: '', notes: '' })
 const columns = reactive([
   { key: 'select', label: '', width: 48, min: 48 },
-  { key: 'company', label: '公司', width: 260, min: 200 },
+  { key: 'name', label: '姓名', width: 160, min: 120 },
+  { key: 'company', label: '公司', width: 240, min: 180 },
   { key: 'email', label: '邮箱', width: 260, min: 210 },
   { key: 'phone', label: '联系电话', width: 150, min: 130 },
   { key: 'tags', label: '标签', width: 150, min: 120 },
@@ -64,7 +65,7 @@ function filterContacts(list) {
 async function save() {
   await api.createContact({
     ...form,
-    name: form.company || form.name || form.email,
+    name: form.name || form.company || form.email,
   })
   Object.assign(form, { name: '', email: '', company: '', department: '', phone: '', tags: '', notes: '' })
   await load()
@@ -201,11 +202,12 @@ onMounted(load)
       </label>
     </div>
     <div class="contact-actions">
-      <input v-model="query" placeholder="搜索公司、邮箱、电话、标签或备注" @keydown.enter.prevent="search" />
+      <input v-model="query" placeholder="搜索姓名、公司、邮箱、电话、标签或备注" @keydown.enter.prevent="search" />
       <button class="secondary" @click="search">搜索</button>
       <button class="secondary" :disabled="selectedIds.length === 0" @click="jumpToCampaign">创建邮件任务</button>
     </div>
     <form class="panel grid five contact-form" @submit.prevent="save">
+      <label>姓名<input v-model="form.name" /></label>
       <label>公司名称<input v-model="form.company" required /></label>
       <label>邮箱<input v-model="form.email" type="email" required /></label>
       <label>手机号<input v-model="form.phone" /></label>
@@ -243,7 +245,8 @@ onMounted(load)
             <tr v-for="item in items" :key="item.id">
               <td class="select-cell"><input class="contact-check" type="checkbox" :checked="isSelected(item.id)"
                   @change="toggleOne(item.id)" /></td>
-              <td class="company-cell">{{ item.company || item.name }}</td>
+              <td class="person-cell">{{ item.name || '-' }}</td>
+              <td class="company-cell">{{ item.company || '-' }}</td>
               <td>
                 <div class="chip-list">
                   <span v-for="(email, index) in splitValues(item.email)" :key="email" class="data-chip"

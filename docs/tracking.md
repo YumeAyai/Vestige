@@ -15,10 +15,11 @@
 TRACKING_BASE_URL=https://track.example.com go run ./local-backend/cmd/server
 ```
 
-如果不设置 `TRACKING_BASE_URL`，开发环境默认使用：
+也可以在 `config.yaml` 中设置：
 
-```text
-http://localhost:8081
+```yaml
+local_backend:
+  tracking_base_url: "https://track.example.com"
 ```
 
 本地系统负责：
@@ -39,6 +40,15 @@ http://localhost:8081
 TRACKING_ADDR=:8081 TRACKING_DB_PATH=data/tracking.db go run ./tracking-server/cmd/server
 ```
 
+对应的 YAML 配置：
+
+```yaml
+tracking_cloud:
+  addr: ":8081"
+  db_path: "data/tracking.db"
+  asset_dir: "data/tracking-assets"
+```
+
 埋点云负责：
 
 - `GET /p`：记录打开事件，返回 1x1 GIF。
@@ -46,6 +56,39 @@ TRACKING_ADDR=:8081 TRACKING_DB_PATH=data/tracking.db go run ./tracking-server/c
 - `GET /qrcode.png`：记录二维码图片加载事件，返回二维码 PNG。
 - `GET /api/stats`：返回匿名聚合统计。
 - `GET /api/events`：返回匿名事件列表，供本地系统拉取导入。
+
+## 腾讯云 SCF 版本
+
+SCF 入口位于：
+
+```text
+tracking-server/cmd/scf
+```
+
+它使用腾讯云 SCF Go event handler 接 API 网关事件，接口路径保持一致：
+
+- `GET /health`
+- `GET /p`
+- `GET /r`
+- `GET /qrcode.png`
+- `GET /api/stats`
+- `GET /api/events`
+- `POST /api/assets`
+
+SCF 版不依赖本地磁盘，数据写入腾讯云文档数据库 MongoDB：
+
+- `tracking_events`：匿名 open/click/qrcode 事件，包含自增 `id`，本地同步仍使用 `after_id` 游标。
+- `tracking_assets`：上传后的图片埋点资产，邮件客户端访问 `/qrcode.png?asset=...` 时从文档数据库读取。
+- `tracking_counters`：维护事件自增 id。
+
+SCF 环境变量：
+
+| 环境变量 | 含义 |
+| :--- | :--- |
+| `MONGODB_URI` | 文档数据库 MongoDB 连接串 |
+| `MONGODB_DATABASE` | 数据库名，默认 `nousmail_tracking` |
+| `MONGODB_EVENTS_COLLECTION` | 事件集合名，默认 `tracking_events` |
+| `MONGODB_ASSETS_COLLECTION` | 图片资产集合名，默认 `tracking_assets` |
 
 ## URL 契约
 

@@ -2,24 +2,19 @@ package main
 
 import (
 	"log"
-	"os"
-	"strings"
 
+	"nousmail/pkg/config"
 	"nousmail/pkg/db"
 	"nousmail/tracking-server/internal/trackingcloud"
 )
 
 func main() {
-	dbPath := strings.TrimSpace(os.Getenv("TRACKING_DB_PATH"))
-	if dbPath == "" {
-		dbPath = "data/tracking.db"
-	}
-	addr := strings.TrimSpace(os.Getenv("TRACKING_ADDR"))
-	if addr == "" {
-		addr = ":8081"
+	cfg, err := config.LoadDefault()
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	store, err := db.Open(dbPath)
+	store, err := db.Open(cfg.TrackingCloud.DBPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -29,8 +24,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	server := trackingcloud.New(store)
-	if err := server.Run(addr); err != nil {
+	server := trackingcloud.NewWithOptions(store, trackingcloud.Options{AssetDir: cfg.TrackingCloud.AssetDir})
+	if err := server.Run(cfg.TrackingCloud.Addr); err != nil {
 		log.Fatal(err)
 	}
 }

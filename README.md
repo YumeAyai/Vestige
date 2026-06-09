@@ -42,6 +42,25 @@ docs/tracking.md        埋点服务接口与集成契约
 
 ## 本地开发
 
+项目配置集中在 `config.yaml`，也可以用 `NOUSMAIL_CONFIG=/path/to/config.yaml` 指定其他配置文件。环境变量会覆盖 YAML 配置。
+
+常用配置：
+
+```yaml
+local_backend:
+  addr: ":8080"
+  db_path: "data/app.db"
+  tracking_base_url: "https://xray-7g6vc4y2d2fc01be-1309857796.ap-shanghai.app.tcloudbase.com/jianji"
+
+tracking_cloud:
+  addr: ":8081"
+  db_path: "data/tracking.db"
+
+frontend:
+  dev_port: 5173
+  api_proxy: "http://localhost:8080"
+```
+
 启动本地邮件系统：
 
 ```bash
@@ -68,7 +87,7 @@ npm run dev
 - 匿名埋点云：`http://localhost:8081`
 - Vite 前端：`http://localhost:5173`
 
-开发模式下，本地邮件系统默认把埋点 URL 指向 `http://localhost:8081`。如果埋点云部署到公网，启动本地邮件系统前设置：
+开发模式下，本地邮件系统会读取 `config.yaml` 的 `local_backend.tracking_base_url`。如果临时覆盖埋点云地址，也可以启动前设置：
 
 ```bash
 TRACKING_BASE_URL=https://track.example.com go run ./local-backend/cmd/server

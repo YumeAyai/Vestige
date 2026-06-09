@@ -4,11 +4,16 @@ import (
 	"log"
 	"nousmail/local-backend/internal/app"
 	"nousmail/local-backend/internal/webui"
+	"nousmail/pkg/config"
 	"nousmail/pkg/db"
 )
 
 func main() {
-	store, err := db.Open("data/app.db")
+	cfg, err := config.LoadDefault()
+	if err != nil {
+		log.Fatal(err)
+	}
+	store, err := db.Open(cfg.LocalBackend.DBPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -18,8 +23,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	server := app.New(store, webui.FS)
-	if err := server.Run(":8080"); err != nil {
+	server := app.NewWithConfig(store, webui.FS, cfg)
+	if err := server.Run(cfg.LocalBackend.Addr); err != nil {
 		log.Fatal(err)
 	}
 }

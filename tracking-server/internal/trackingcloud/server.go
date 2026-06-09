@@ -19,7 +19,8 @@ import (
 )
 
 type Server struct {
-	db *sql.DB
+	db       *sql.DB
+	assetDir string
 }
 
 type Event struct {
@@ -100,7 +101,15 @@ func addColumns(conn *sql.DB, table string, columns map[string]string) error {
 }
 
 func New(db *sql.DB) *gin.Engine {
-	s := &Server{db: db}
+	return NewWithOptions(db, Options{})
+}
+
+type Options struct {
+	AssetDir string
+}
+
+func NewWithOptions(db *sql.DB, opts Options) *gin.Engine {
+	s := &Server{db: db, assetDir: strings.TrimSpace(opts.AssetDir)}
 	r := gin.Default()
 	r.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true, "service": "tracking-cloud"}) })
 	r.GET("/p", s.pixel)
@@ -143,7 +152,7 @@ func (s *Server) qrcode(c *gin.Context) {
 			c.Status(http.StatusNotFound)
 			return
 		}
-		path := filepath.Join(trackingAssetDir(), name)
+		path := filepath.Join(s.trackingAssetDir(), name)
 		if _, err := os.Stat(path); err != nil {
 			c.Status(http.StatusNotFound)
 			return
@@ -200,7 +209,7 @@ func (s *Server) uploadAsset(c *gin.Context) {
 	if label == "" {
 		label = "企业微信二维码"
 	}
-	dir := trackingAssetDir()
+	dir := s.trackingAssetDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		fail(c, err)
 		return
@@ -395,9 +404,12 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func trackingAssetDir() string {
+func (s *Server) trackingAssetDir() string {
 	if value := strings.TrimSpace(os.Getenv("TRACKING_ASSET_DIR")); value != "" {
 		return value
+	}
+	if s.assetDir != "" {
+		return s.assetDir
 	}
 	return filepath.Join("data", "tracking-assets")
 }
