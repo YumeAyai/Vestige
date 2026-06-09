@@ -942,7 +942,7 @@ func fail(c *gin.Context, err error) {
 }
 
 func cell(record []string, index int) string {
-	if index >= len(record) {
+	if index < 0 || index >= len(record) {
 		return ""
 	}
 	return strings.TrimSpace(record[index])
@@ -1004,8 +1004,8 @@ func readContactsXLSX(data []byte) ([]models.Contact, error) {
 
 func contactFromRow(value func(name string, fallback int) string) models.Contact {
 	company := firstNonEmpty(value("公司名", 0), value("公司", 0), value("企业名称", 0))
-	email := firstNonEmpty(value("邮箱", 4), value("email", 1), value("Email", 1))
-	phone := firstNonEmpty(value("联系电话", 3), value("手机号", 4), value("电话", 4))
+	email := firstNonEmpty(value("邮箱", -1), value("email", -1), value("Email", -1), value("", 1), value("", 4))
+	phone := firstNonEmpty(value("联系电话", -1), value("手机号", -1), value("电话", -1), value("", 4), value("", 3))
 	industry := value("行业", 8)
 	size := value("规模", 9)
 	tags := strings.Trim(strings.Join([]string{industry, size}, ","), ",")
