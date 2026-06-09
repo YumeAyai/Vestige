@@ -16,7 +16,11 @@ watch(
 <template>
   <div class="shell" :class="{ 'drawer-open': drawerOpen }">
     <header class="mobile-topbar">
-      <button class="menu-button secondary" type="button" @click="drawerOpen = true">菜单</button>
+      <button class="menu-button secondary" type="button" aria-label="打开导航菜单" @click="drawerOpen = true">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M4 7h16M4 12h16M4 17h16" />
+        </svg>
+      </button>
       <div class="mobile-title">
         <strong>Nous Mail</strong>
         <span>调研邮件监控</span>

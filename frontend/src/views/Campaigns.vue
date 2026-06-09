@@ -9,6 +9,7 @@ const contacts = ref([])
 const mailboxes = ref([])
 const templates = ref([])
 const selectedTemplate = ref('')
+const contactQuery = ref('')
 const form = reactive({
   name: '',
   subject: '',
@@ -23,6 +24,16 @@ const canCreate = computed(
     form.name && form.subject && form.body_html && form.mailbox_id && form.contact_ids.length > 0,
 )
 
+const filteredContacts = computed(() => {
+  const query = contactQuery.value.trim().toLowerCase()
+  if (!query) return contacts.value
+  return contacts.value.filter((item) =>
+    [item.name, item.email, item.company, item.phone, item.tags]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(query)),
+  )
+})
+
 async function load() {
   campaigns.value = await api.campaigns()
   contacts.value = await api.contacts()
@@ -36,6 +47,20 @@ function applyTemplate() {
   form.subject = tpl.subject
   form.body_html = tpl.body_html
   if (!form.name) form.name = tpl.name
+}
+
+function isContactSelected(id) {
+  return form.contact_ids.includes(Number(id))
+}
+
+function toggleContact(id) {
+  const value = Number(id)
+  const index = form.contact_ids.indexOf(value)
+  if (index >= 0) {
+    form.contact_ids.splice(index, 1)
+  } else {
+    form.contact_ids.push(value)
+  }
 }
 
 async function create() {
@@ -84,14 +109,34 @@ onMounted(load)
         </label>
         <label>邮件主题<input v-model="form.subject" required /></label>
         <label>HTML 正文<textarea v-model="form.body_html" required /></label>
-        <label>
-          收件人
-          <select v-model="form.contact_ids" multiple size="8" required>
-            <option v-for="item in contacts" :key="item.id" :value="item.id">
-              {{ item.name }} - {{ item.email }}
-            </option>
-          </select>
-        </label>
+        <div class="field-block">
+          <div class="field-label">收件人</div>
+          <input v-model="contactQuery" placeholder="搜索公司、邮箱、电话或标签" />
+          <div class="picker-list" role="listbox" aria-label="收件人列表" aria-multiselectable="true">
+            <button
+              v-for="item in filteredContacts"
+              :key="item.id"
+              class="picker-option"
+              :class="{ selected: isContactSelected(item.id) }"
+              type="button"
+              role="option"
+              :aria-selected="isContactSelected(item.id)"
+              @click="toggleContact(item.id)"
+            >
+              <span class="picker-check" aria-hidden="true">
+                <svg v-if="isContactSelected(item.id)" viewBox="0 0 24 24">
+                  <path d="M5 12.5l4.2 4.2L19 7" />
+                </svg>
+              </span>
+              <span class="picker-main">
+                <strong>{{ item.name || item.company || item.email }}</strong>
+                <small>{{ item.email }}</small>
+              </span>
+            </button>
+            <p v-if="filteredContacts.length === 0" class="empty">没有匹配的联系人</p>
+          </div>
+          <p class="muted">已选择 {{ form.contact_ids.length }} 个收件人，系统会逐个单独发送。</p>
+        </div>
         <label
           ><span
             ><input v-model="form.tracking_enabled" type="checkbox" style="width: auto" />
