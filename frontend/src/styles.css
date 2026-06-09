@@ -579,6 +579,9 @@ td a {
 
   .menu-button {
     align-items: center;
+    background: transparent;
+    border: 0;
+    color: #17233c;
     display: inline-flex;
     height: 38px;
     justify-content: center;
@@ -587,9 +590,15 @@ td a {
     width: 42px;
   }
 
+  .menu-button:hover {
+    background: #eef4f0;
+    border: 0;
+    box-shadow: none;
+  }
+
   .menu-button svg {
-    height: 22px;
-    width: 22px;
+    height: 28px;
+    width: 28px;
   }
 
   .menu-button path {
