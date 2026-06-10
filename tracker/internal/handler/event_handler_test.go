@@ -212,7 +212,7 @@ func TestUploadAssetReturnsImgURL(t *testing.T) {
 
 	resp, err := h.Handle(context.Background(), model.SCFEvent{
 		Method: http.MethodPost,
-		Path:   "/jianji/api/assets",
+		Path:   "/api/assets",
 		Headers: map[string]string{
 			"Content-Type":      writer.FormDataContentType(),
 			"Host":              "track.example.com",
@@ -234,11 +234,11 @@ func TestUploadAssetReturnsImgURL(t *testing.T) {
 	if err := json.Unmarshal([]byte(resp.Body), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Asset == "" || !strings.Contains(payload.ImageURL, "https://track.example.com/jianji/img?") {
+	if payload.Asset == "" || !strings.Contains(payload.ImageURL, "https://track.example.com/img?") {
 		t.Fatalf("unexpected upload payload: %#v", payload)
 	}
-	if !strings.Contains(payload.HTML, `/jianji/img?`) {
-		t.Fatalf("html should use mounted /jianji/img: %s", payload.HTML)
+	if !strings.Contains(payload.HTML, `/img?`) {
+		t.Fatalf("html should use /img: %s", payload.HTML)
 	}
 }
 
