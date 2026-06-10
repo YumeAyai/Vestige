@@ -289,6 +289,54 @@ func TestUploadAssetPreservesMountedSCFBaseURL(t *testing.T) {
 	}
 }
 
+func TestUploadAssetUsesConfiguredPublicBaseURL(t *testing.T) {
+	mem := newMemoryStore()
+	h := NewHandler(mem)
+	h.PublicBaseURL = "https://track.example.com/jianji"
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "qr.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte{0x89, 'P', 'N', 'G'}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := h.Handle(context.Background(), model.SCFEvent{
+		Method: http.MethodPost,
+		Path:   "/api/assets",
+		Headers: map[string]string{
+			"Content-Type":      writer.FormDataContentType(),
+			"Host":              "track.example.com",
+			"X-Forwarded-Proto": "https",
+		},
+		Body: body.String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected upload response: %#v", resp)
+	}
+	var payload struct {
+		ImageURL string `json:"image_url"`
+		HTML     string `json:"html"`
+	}
+	if err := json.Unmarshal([]byte(resp.Body), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(payload.ImageURL, "https://track.example.com/jianji/img?") {
+		t.Fatalf("image_url should use configured public base URL: %#v", payload)
+	}
+	if !strings.Contains(payload.HTML, `/jianji/img?`) {
+		t.Fatalf("html should use configured public base URL: %s", payload.HTML)
+	}
+}
+
 func TestAssetsGetReturnsEndpointInfo(t *testing.T) {
 	resp, err := NewHandler(newMemoryStore()).Handle(context.Background(), model.SCFEvent{
 		Method: http.MethodGet,

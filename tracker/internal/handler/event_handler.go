@@ -22,8 +22,9 @@ import (
 )
 
 type Handler struct {
-	Store store.Store
-	Now   func() time.Time
+	Store         store.Store
+	Now           func() time.Time
+	PublicBaseURL string
 }
 
 var serviceVersion = "event-dev"
@@ -248,7 +249,7 @@ func (h *Handler) uploadAsset(ctx context.Context, event model.SCFEvent) (model.
 		return jsonResponse(400, map[string]any{"error": err.Error()}), nil
 	}
 
-	baseURL := requestBaseURL(event)
+	baseURL := h.trackingBaseURL(event)
 	return jsonResponse(200, map[string]any{
 		"label":       label,
 		"asset":       name,
@@ -274,6 +275,13 @@ func (h *Handler) now() time.Time {
 		return h.Now()
 	}
 	return time.Now()
+}
+
+func (h *Handler) trackingBaseURL(event model.SCFEvent) string {
+	if value := strings.TrimSpace(h.PublicBaseURL); value != "" {
+		return value
+	}
+	return requestBaseURL(event)
 }
 
 func eventFromRequest(query url.Values, event model.SCFEvent, kind string, now time.Time) model.Event {
