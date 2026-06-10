@@ -8,15 +8,10 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
-      version:
-        description: Release tag/version, for example v0.1.0
+      label:
+        description: Artifact label, for example test-20260610
         required: false
         type: string
-      prerelease:
-        description: Mark the GitHub Release as prerelease
-        required: true
-        type: boolean
-        default: true
 
 permissions:
   contents: write
@@ -56,24 +51,14 @@ jobs:
           set -euo pipefail
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             version="${GITHUB_REF_NAME}"
-            prerelease="false"
-            make_latest="true"
           elif [ "${GITHUB_REF_NAME}" = "dev" ]; then
-            version="dev-latest"
-            prerelease="true"
-            make_latest="false"
-          elif [ -n "${{ inputs.version }}" ]; then
-            version="${{ inputs.version }}"
-            prerelease="${{ inputs.prerelease }}"
-            make_latest="false"
+            version="dev-${GITHUB_SHA::7}"
+          elif [ -n "${{ inputs.label }}" ]; then
+            version="${{ inputs.label }}"
           else
-            version="dev-$(date -u +%Y%m%d-%H%M%S)"
-            prerelease="true"
-            make_latest="false"
+            version="manual-$(date -u +%Y%m%d-%H%M%S)"
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
-          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
-          echo "make_latest=${make_latest}" >> "$GITHUB_OUTPUT"
 
       - name: Run Go tests
         run: go test ./pkg/... ./backend/... ./tracker/...
@@ -98,14 +83,31 @@ jobs:
       - name: Version tracker package
         run: cp dist/tracker.zip "dist/tracker-${{ steps.meta.outputs.version }}.zip"
 
+      - name: Upload app artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-app-${{ steps.meta.outputs.version }}
+          path: dist/vestige-app-${{ steps.meta.outputs.version }}.zip
+          if-no-files-found: error
+
+      - name: Upload tracker artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracker-${{ steps.meta.outputs.version }}
+          path: dist/tracker-${{ steps.meta.outputs.version }}.zip
+          if-no-files-found: error
+
       - name: Upload release
+        if: github.ref_type == 'tag'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.version }}
           target_commitish: ${{ github.sha }}
           name: Vestige ${{ steps.meta.outputs.version }}
-          prerelease: ${{ steps.meta.outputs.prerelease }}
-          make_latest: ${{ steps.meta.outputs.make_latest }}
+          prerelease: false
+          make_latest: true
           files: |
             dist/vestige-app-${{ steps.meta.outputs.version }}.zip
             dist/tracker-${{ steps.meta.outputs.version }}.zip
