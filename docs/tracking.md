@@ -18,7 +18,7 @@ TRACKING_BASE_URL=https://track.example.com go run ./backend/cmd/server
 也可以在 `config.yaml` 中设置：
 
 ```yaml
-local_backend:
+client:
   tracking_base_url: "https://track.example.com"
 ```
 

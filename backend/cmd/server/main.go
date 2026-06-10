@@ -13,7 +13,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	store, err := db.Open(cfg.LocalBackend.DBPath)
+	store, err := db.Open(cfg.Client.DBPath)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -24,7 +24,7 @@ func main() {
 	}
 
 	server := app.NewWithConfig(store, webui.FS, cfg)
-	if err := server.Run(cfg.LocalBackend.Addr); err != nil {
+	if err := server.Run(cfg.Client.Addr); err != nil {
 		log.Fatal(err)
 	}
 }

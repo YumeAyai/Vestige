@@ -1607,17 +1607,17 @@ func (s *Server) trackingBaseURL(c *gin.Context) string {
 	if value := strings.TrimSpace(c.GetHeader("X-Tracking-Base-URL")); value != "" {
 		return value
 	}
-	if value := strings.TrimSpace(s.cfg.LocalBackend.TrackingBaseURL); value != "" {
+	if value := strings.TrimSpace(s.cfg.Client.TrackingBaseURL); value != "" {
 		return value
 	}
-	return "http://localhost:8081"
+	return config.Default().Client.TrackingBaseURL
 }
 
 func (s *Server) trackingSourceToken() string {
 	if value := strings.TrimSpace(os.Getenv("TRACKING_SOURCE_TOKEN")); value != "" {
 		return value
 	}
-	if value := strings.TrimSpace(s.cfg.LocalBackend.TrackingSourceToken); value != "" {
+	if value := strings.TrimSpace(s.cfg.Client.TrackingSourceToken); value != "" {
 		return value
 	}
 	var token string
@@ -1673,7 +1673,7 @@ func (s *Server) qrcodeTargetURL(token string) string {
 		}
 		return value + separator + "t=" + token
 	}
-	value := strings.TrimSpace(s.cfg.LocalBackend.QRCodeTargetURL)
+	value := strings.TrimSpace(s.cfg.Client.QRCodeTargetURL)
 	if value == "" {
 		value = "https://example.com/survey"
 	}

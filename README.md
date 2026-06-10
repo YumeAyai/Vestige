@@ -47,14 +47,19 @@ docs/tracking.md        埋点服务接口与集成契约
 常用配置：
 
 ```yaml
-local_backend:
+client:
   addr: ":8080"
   db_path: "data/app.db"
   tracking_base_url: "https://xray-7g6vc4y2d2fc01be-1309857796.ap-shanghai.app.tcloudbase.com/jianji"
+  tracking_source_token: ""
+  qr_code_target_url: "https://example.com/survey"
 
-frontend:
-  dev_port: 5173
-  api_proxy: "http://localhost:8080"
+scf:
+  tcb:
+    env_id: "xray-7g6vc4y2d2fc01be"
+    region: "ap-shanghai"
+    events_collection: "tracking_events"
+    assets_collection: "tracking_assets"
 ```
 
 启动本地邮件系统：
@@ -80,7 +85,7 @@ npm run dev
 默认地址：
 
 - 本地邮件系统：`http://localhost:8080`
-- 匿名埋点云：`http://localhost:8081`
+- 匿名埋点云：`https://xray-7g6vc4y2d2fc01be-1309857796.ap-shanghai.app.tcloudbase.com/jianji`
 - Vite 前端：`http://localhost:5173`
 
 ## 构建交付
@@ -98,7 +103,7 @@ sh scripts/build-tracker-function.sh
 - `dist/main`：云函数 Linux amd64 可执行文件
 - `dist/tracker.zip`：云函数部署包
 
-开发模式下，本地邮件系统会读取 `config.yaml` 的 `local_backend.tracking_base_url`。如果临时覆盖埋点云地址，也可以启动前设置：
+开发模式下，本地邮件系统会读取 `config.yaml` 的 `client.tracking_base_url`。如果临时覆盖埋点云地址，也可以启动前设置：
 
 ```bash
 TRACKING_BASE_URL=https://track.example.com go run ./backend/cmd/server

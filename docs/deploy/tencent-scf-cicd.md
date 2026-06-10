@@ -30,7 +30,7 @@
 | `TENCENTCLOUD_SECRET_ID` | 调用 TCB OpenAPI 的 SecretId |
 | `TENCENTCLOUD_SECRET_KEY` | 调用 TCB OpenAPI 的 SecretKey |
 
-SCF 运行时使用腾讯云 Go SDK 的 `RunCommands` 调用 CloudBase 文档型数据库，不需要 `MONGODB_URI`。这些值也可以写入 `config.yaml` 的 `scf.tcb`，SCF 环境变量优先级更高。
+SCF 运行时使用腾讯云 Go SDK 的 `RunCommands` 调用 CloudBase 文档型数据库。`TCB_ENV_ID`、地域和集合名可以写入 `config.yaml` 的 `scf.tcb`，SCF 环境变量优先级更高。
 
 ## 云函数部署包
 
@@ -52,13 +52,13 @@ HTTP 函数启动时会先启动 Gin 监听 `PORT`，TCB 数据库连接会在�
 ## 部署流程
 
 1. 进入 GitHub Actions。
-2. 选择 `Tracking SCF CD`。
+2. 选择 `Release`。
 3. 点击 `Run workflow`。
-4. 先不勾选 `deploy`，确认能成功产出 `tracking-scf-package` artifact。
-5. 确认 SCF 使用 Go 事件函数运行时，Handler 为 `main`，环境变量已配置后，再勾选 `deploy`。
+4. 在 `dev` 分支运行时，确认能成功产出 `tracker-*` artifact。
+5. 确认 SCF 使用 Go 事件函数运行时，上传 `tracker-*` artifact 中的 `tracker.zip`，Handler 为 `main`，环境变量已配置。
 
 ## 注意
 
 - 当前云函数入口位于 `tracker/cmd/scf`，用腾讯云 SCF Go event handler 接 API 网关事件；部署时需要把 HTTP 路径绑定到 `/jianji`，否则默认 Event 函数没有公网 HTTP 访问路径。
-- 文档型数据库访问走腾讯云 TCB OpenAPI 的 `RunCommands`，不要再配置 `MONGODB_URI`。
+- 文档型数据库访问走腾讯云 TCB OpenAPI 的 `RunCommands`，配置入口是 `scf.tcb` 和对应的 `TCB_*` 环境变量。
 - 生产部署建议给部署用 CAM 子账号只授予 SCF 更新函数代码的最小权限。

@@ -56,7 +56,7 @@ func TestQRCodeTargetURLUsesEnvAndChoosesSeparator(t *testing.T) {
 
 func TestTrackingBaseURLIgnoresAppBaseURLHeader(t *testing.T) {
 	cfg := config.Default()
-	cfg.LocalBackend.TrackingBaseURL = "https://track.example.com/jianji"
+	cfg.Client.TrackingBaseURL = "https://track.example.com/jianji"
 	server := &Server{cfg: cfg}
 	rec := httptest.NewRecorder()
 	ctx, _ := gin.CreateTestContext(rec)
