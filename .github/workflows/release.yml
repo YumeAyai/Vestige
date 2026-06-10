@@ -83,12 +83,44 @@ jobs:
       - name: Version tracker package
         run: cp dist/tracker.zip "dist/tracker-${{ steps.meta.outputs.version }}.zip"
 
-      - name: Upload app artifact
+      - name: Upload linux amd64 artifact
         if: github.ref_type != 'tag'
         uses: actions/upload-artifact@v4
         with:
-          name: vestige-app-${{ steps.meta.outputs.version }}
-          path: dist/vestige-app-${{ steps.meta.outputs.version }}.zip
+          name: vestige-linux-amd64-${{ steps.meta.outputs.version }}
+          path: dist/app/vestige-linux-amd64
+          if-no-files-found: error
+
+      - name: Upload linux arm64 artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-linux-arm64-${{ steps.meta.outputs.version }}
+          path: dist/app/vestige-linux-arm64
+          if-no-files-found: error
+
+      - name: Upload windows amd64 artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-windows-amd64-${{ steps.meta.outputs.version }}
+          path: dist/app/vestige-windows-amd64.exe
+          if-no-files-found: error
+
+      - name: Upload darwin amd64 artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-darwin-amd64-${{ steps.meta.outputs.version }}
+          path: dist/app/vestige-darwin-amd64
+          if-no-files-found: error
+
+      - name: Upload darwin arm64 artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-darwin-arm64-${{ steps.meta.outputs.version }}
+          path: dist/app/vestige-darwin-arm64
           if-no-files-found: error
 
       - name: Upload tracker artifact
