@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nousmail/pkg/config"
+	"Vestige/pkg/config"
 )
 
 func TestReadContactsCSVWithoutHeaderUsesFallbackColumns(t *testing.T) {

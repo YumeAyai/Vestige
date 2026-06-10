@@ -9,7 +9,7 @@ import (
 	"net/textproto"
 	"strings"
 
-	"nousmail/pkg/models"
+	"Vestige/pkg/models"
 
 	"gopkg.in/gomail.v2"
 )

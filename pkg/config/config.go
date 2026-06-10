@@ -9,6 +9,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var BuildVersion = "app-dev"
+
 type Config struct {
 	LocalBackend  LocalBackendConfig  `yaml:"local_backend"`
 	TrackingCloud TrackingCloudConfig `yaml:"tracking_cloud"`
@@ -73,7 +75,7 @@ func Default() Config {
 		},
 		SCF: SCFConfig{
 			MongoDB: MongoDBConfig{
-				Database:         "nousmail_tracking",
+				Database:         "vestige_tracking",
 				EventsCollection: "tracking_events",
 				AssetsCollection: "tracking_assets",
 			},
@@ -87,7 +89,7 @@ func Default() Config {
 }
 
 func LoadDefault() (Config, error) {
-	path := strings.TrimSpace(os.Getenv("NOUSMAIL_CONFIG"))
+	path := strings.TrimSpace(os.Getenv("VESTIGE_CONFIG"))
 	if path == "" {
 		path = "config.yaml"
 	}
@@ -133,7 +135,7 @@ func applyEnv(cfg *Config) {
 	setString(&cfg.SCF.MongoDB.Database, "MONGODB_DATABASE")
 	setString(&cfg.SCF.MongoDB.EventsCollection, "MONGODB_EVENTS_COLLECTION")
 	setString(&cfg.SCF.MongoDB.AssetsCollection, "MONGODB_ASSETS_COLLECTION")
-	setString(&cfg.SCF.TCB.EnvID, "TCB_ENV_ID")
+	setStringAny(&cfg.SCF.TCB.EnvID, "TCB_ENV_ID", "TCB_ENV", "SCF_NAMESPACE")
 	setString(&cfg.SCF.TCB.Region, "TCB_REGION")
 	setString(&cfg.SCF.TCB.EventsCollection, "TCB_EVENTS_COLLECTION")
 	setString(&cfg.SCF.TCB.AssetsCollection, "TCB_ASSETS_COLLECTION")
@@ -142,6 +144,15 @@ func applyEnv(cfg *Config) {
 func setString(target *string, key string) {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 		*target = value
+	}
+}
+
+func setStringAny(target *string, keys ...string) {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			*target = value
+			return
+		}
 	}
 }
 

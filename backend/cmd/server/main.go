@@ -1,11 +1,11 @@
 package main
 
 import (
+	"Vestige/backend/internal/app"
+	"Vestige/backend/internal/webui"
+	"Vestige/pkg/config"
+	"Vestige/pkg/db"
 	"log"
-	"nousmail/local-backend/internal/app"
-	"nousmail/local-backend/internal/webui"
-	"nousmail/pkg/config"
-	"nousmail/pkg/db"
 )
 
 func main() {

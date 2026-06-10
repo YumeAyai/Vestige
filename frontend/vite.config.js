@@ -3,7 +3,7 @@ import vue from '@vitejs/plugin-vue'
 import fs from 'node:fs'
 
 function readConfig() {
-  const path = process.env.NOUSMAIL_CONFIG || '../config.yaml'
+  const path = process.env.VESTIGE_CONFIG || '../config.yaml'
   try {
     return fs.readFileSync(path, 'utf8')
   } catch {
@@ -25,7 +25,7 @@ const apiProxy = process.env.FRONTEND_API_PROXY || yamlValue('frontend', 'api_pr
 export default defineConfig({
   plugins: [vue()],
   build: {
-    outDir: '../local-backend/internal/webui/dist',
+    outDir: '../backend/internal/webui/dist',
     emptyOutDir: true
   },
   server: {

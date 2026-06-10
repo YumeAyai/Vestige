@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	localdb "nousmail/pkg/db"
+	localdb "Vestige/pkg/db"
 )
 
 func TestSendCampaignReturnsAcceptedWithoutWaitingForSMTP(t *testing.T) {

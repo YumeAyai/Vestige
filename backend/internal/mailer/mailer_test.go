@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"nousmail/pkg/models"
+	"Vestige/pkg/models"
 )
 
 func TestValidateMailboxReportsMissingFields(t *testing.T) {

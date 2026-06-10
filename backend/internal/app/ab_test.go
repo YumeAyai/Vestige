@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"testing"
 
-	localdb "nousmail/pkg/db"
+	localdb "Vestige/pkg/db"
 )
 
 func TestCreateVariantRouteStoresVariant(t *testing.T) {
