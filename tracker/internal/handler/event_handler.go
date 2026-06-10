@@ -406,7 +406,26 @@ func requestBaseURL(event model.SCFEvent) string {
 	if host == "" {
 		host = "localhost"
 	}
-	return scheme + "://" + host
+	return scheme + "://" + host + mountedPrefix(eventPath(event))
+}
+
+func mountedPrefix(path string) string {
+	path = strings.TrimSpace(path)
+	if idx := strings.Index(path, "?"); idx >= 0 {
+		path = path[:idx]
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	route := mountedRoute(path)
+	if route == path || !strings.HasSuffix(path, route) {
+		return ""
+	}
+	prefix := strings.TrimSuffix(path, route)
+	if prefix == "/" {
+		return ""
+	}
+	return strings.TrimRight(prefix, "/")
 }
 
 func header(event model.SCFEvent, key string) string {

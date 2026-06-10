@@ -130,3 +130,38 @@ func TestTCBStoreRecordEventPreservesNanosecondID(t *testing.T) {
 		t.Fatalf("unexpected id: got %d want %d", id, eventTime.UnixNano())
 	}
 }
+
+func TestTCBStoreSaveAssetUsesNameAsID(t *testing.T) {
+	client := &fakeRunCommandsClient{results: []string{`{"ok":1}`}}
+	store := NewTCBStoreWithClient(client, TCBConfig{EnvID: "env-1", AssetsCollection: "tracking_assets"})
+
+	err := store.SaveAsset(context.Background(), model.Asset{
+		Name:        "asset-1.png",
+		Label:       "Asset",
+		ContentType: "image/png",
+		Data:        []byte("png"),
+		Width:       132,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body struct {
+		Documents []map[string]any `json:"documents"`
+	}
+	if err := json.Unmarshal([]byte(*client.requests[0].MgoCommands[0].Command), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Documents[0]["_id"] != "asset-1.png" || body.Documents[0]["name"] != "asset-1.png" {
+		t.Fatalf("asset should use stable name id, got %#v", body.Documents[0])
+	}
+}
+
+func TestTCBStoreReportsCommandWriteErrors(t *testing.T) {
+	client := &fakeRunCommandsClient{results: []string{`{"ok":0,"errmsg":"insert failed"}`}}
+	store := NewTCBStoreWithClient(client, TCBConfig{EnvID: "env-1", AssetsCollection: "tracking_assets"})
+
+	err := store.SaveAsset(context.Background(), model.Asset{Name: "asset-1.png", Data: []byte("png")})
+	if err == nil || !strings.Contains(err.Error(), "tcb command failed") {
+		t.Fatalf("expected command failure, got %v", err)
+	}
+}

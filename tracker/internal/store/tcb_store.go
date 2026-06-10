@@ -55,6 +55,7 @@ type tcbEventDoc struct {
 }
 
 type tcbAssetDoc struct {
+	ID          string `json:"_id,omitempty"`
 	Name        string `json:"name"`
 	Label       string `json:"label"`
 	ContentType string `json:"content_type"`
@@ -274,6 +275,7 @@ func (s *TCBStore) SaveAsset(ctx context.Context, asset model.Asset) error {
 		asset.CreatedAt = time.Now().UTC()
 	}
 	doc := tcbAssetDoc{
+		ID:          asset.Name,
 		Name:        asset.Name,
 		Label:       asset.Label,
 		ContentType: asset.ContentType,
@@ -292,6 +294,12 @@ func (s *TCBStore) GetAsset(ctx context.Context, name string) (model.Asset, erro
 	docs, err := s.find(ctx, s.assets, map[string]any{"name": name}, map[string]any{}, 1)
 	if err != nil {
 		return model.Asset{}, err
+	}
+	if len(docs) == 0 {
+		docs, err = s.find(ctx, s.assets, map[string]any{"_id": name}, map[string]any{}, 1)
+		if err != nil {
+			return model.Asset{}, err
+		}
 	}
 	if len(docs) == 0 {
 		return model.Asset{}, ErrNotFound
@@ -354,9 +362,33 @@ func (s *TCBStore) runCommand(ctx context.Context, table, commandType string, co
 		if item == nil || strings.TrimSpace(*item) == "" {
 			continue
 		}
-		results = append(results, json.RawMessage(*item))
+		raw := json.RawMessage(*item)
+		if err := commandResultError(raw); err != nil {
+			return nil, err
+		}
+		results = append(results, raw)
 	}
 	return results, nil
+}
+
+func commandResultError(raw json.RawMessage) error {
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	if okRaw, ok := payload["ok"]; ok {
+		var okNumber float64
+		if err := json.Unmarshal(okRaw, &okNumber); err == nil && okNumber == 0 {
+			return fmt.Errorf("tcb command failed: %s", string(raw))
+		}
+	}
+	if writeErrorsRaw, ok := payload["writeErrors"]; ok {
+		value := strings.TrimSpace(string(writeErrorsRaw))
+		if value != "" && value != "null" && value != "[]" {
+			return fmt.Errorf("tcb command write errors: %s", value)
+		}
+	}
+	return nil
 }
 
 func tcbFilter(filter model.EventFilter) map[string]any {
