@@ -24,7 +24,7 @@ func TestOpenCreatesParentDirectoryAndEnablesForeignKeys(t *testing.T) {
 }
 
 func TestMigrateCreatesCoreTablesAndIsIdempotent(t *testing.T) {
-	conn, err := sql.Open("sqlite3", ":memory:")
+	conn, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
