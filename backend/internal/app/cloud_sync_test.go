@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"testing"
 
-	localdb "nousmail/pkg/db"
+	localdb "Vestige/pkg/db"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -51,13 +51,13 @@ func TestSyncCloudTrackingEventsImportsRemoteEventsByToken(t *testing.T) {
 	}
 	recipientID, _ := res.LastInsertId()
 	if _, err := conn.Exec(`INSERT INTO tracking_marks(campaign_recipient_id,token,kind,label,target_url) VALUES(?,?,?,?,?)`,
-		recipientID, "mark-1", "qrcode", "QR", ""); err != nil {
+		recipientID, "mark-1", "image", "Image", ""); err != nil {
 		t.Fatal(err)
 	}
 
 	events := []cloudTrackingEventInput{
 		{ID: 1, Token: "tracking-1", Kind: "open", EventIndex: "variant:1:open", TriggeredAt: "2026-06-09 10:00:00", IP: "203.0.113.1"},
-		{ID: 2, Token: "mark-1", Kind: "qrcode", EventIndex: "variant:1:image:qr.png", TriggeredAt: "2026-06-09 10:01:00", IP: "203.0.113.2"},
+		{ID: 2, Token: "mark-1", Kind: "image", EventIndex: "variant:1:image:qr.png", TriggeredAt: "2026-06-09 10:01:00", IP: "203.0.113.2"},
 		{ID: 3, Token: "unknown", Kind: "open", TriggeredAt: "2026-06-09 10:02:00", IP: "203.0.113.3"},
 	}
 	previousClient := cloudHTTPClient
@@ -101,7 +101,7 @@ func TestSyncCloudTrackingEventsImportsRemoteEventsByToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	if openCount != 1 || markEventCount != 1 {
-		t.Fatalf("expected imported open and qrcode events, got open_count=%d mark_events=%d", openCount, markEventCount)
+		t.Fatalf("expected imported open and image events, got open_count=%d mark_events=%d", openCount, markEventCount)
 	}
 	var openIndex, markIndex string
 	if err := conn.QueryRow(`SELECT event_index FROM open_events WHERE tracking_id='tracking-1'`).Scan(&openIndex); err != nil {

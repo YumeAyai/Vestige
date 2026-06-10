@@ -38,7 +38,7 @@ export const api = {
     form.append('file', file)
     form.append('label', data.label || '')
     form.append('width', data.width || 176)
-    return request('/api/templates/qrcode-asset', { method: 'POST', body: form })
+    return request('/api/templates/tracking-image-asset', { method: 'POST', body: form })
   },
   campaigns: () => request('/api/campaigns'),
   createCampaign: (data) => request('/api/campaigns', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),

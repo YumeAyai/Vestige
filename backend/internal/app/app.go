@@ -21,10 +21,10 @@ import (
 	"sync"
 	"time"
 
-	"nousmail/local-backend/internal/mailer"
-	"nousmail/pkg/config"
-	"nousmail/pkg/models"
-	"nousmail/pkg/tracker"
+	"Vestige/backend/internal/mailer"
+	"Vestige/pkg/config"
+	"Vestige/pkg/models"
+	"Vestige/pkg/tracker"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -51,7 +51,7 @@ func NewWithConfig(db *sql.DB, frontend fs.FS, cfg config.Config) *gin.Engine {
 
 	api := r.Group("/api")
 	api.GET("/health", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"ok": true}) })
-	r.GET("/qrcode.png", s.trackingImage)
+	r.GET("/img", s.trackingImage)
 
 	api.GET("/mailboxes", s.listMailboxes)
 	api.POST("/mailboxes", s.createMailbox)
@@ -68,7 +68,7 @@ func NewWithConfig(db *sql.DB, frontend fs.FS, cfg config.Config) *gin.Engine {
 	api.PATCH("/templates/:id", s.updateTemplate)
 	api.DELETE("/templates/:id", s.deleteTemplate)
 	api.POST("/templates/:id/copy", s.copyTemplate)
-	api.POST("/templates/qrcode-asset", s.createTemplateQRCodeAsset)
+	api.POST("/templates/tracking-image-asset", s.createTemplateTrackingImageAsset)
 	api.POST("/templates/preview", s.previewTemplate)
 	api.GET("/campaigns", s.listCampaigns)
 	api.POST("/campaigns", s.createCampaign)
@@ -480,7 +480,7 @@ type previewTemplateInput struct {
 	Contact  models.Contact `json:"contact"`
 }
 
-func (s *Server) createTemplateQRCodeAsset(c *gin.Context) {
+func (s *Server) createTemplateTrackingImageAsset(c *gin.Context) {
 	file, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请上传企业微信二维码图片"})
@@ -562,7 +562,7 @@ func (s *Server) trackingImage(c *gin.Context) {
 	if token != "" && token != "preview" {
 		raw, _ := json.Marshal(gin.H{
 			"token":           token,
-			"kind":            "qrcode",
+			"kind":            "image",
 			"event_index":     trackingEventIndexFromQuery(c),
 			"asset":           c.Query("asset"),
 			"ip":              c.ClientIP(),
@@ -573,7 +573,7 @@ func (s *Server) trackingImage(c *gin.Context) {
 		})
 		_ = tracker.NewSQLiteRecorder(s.db).RecordMark(tracker.MarkEvent{
 			Token:          token,
-			Kind:           "qrcode",
+			Kind:           "image",
 			EventIndex:     trackingEventIndexFromQuery(c),
 			Source:         "local",
 			IP:             c.ClientIP(),
@@ -786,13 +786,13 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 		qrHTML := template.HTML("")
 		var markToken string
 		if templateUsesQRCode(bodyTemplate) || templateUsesTrackingImage(bodyTemplate) {
-			markToken, err = s.ensureTrackingMark(rec.ID, "qrcode", "联系二维码", "")
+			markToken, err = s.ensureTrackingMark(rec.ID, "image", "联系图片", "")
 			if err != nil {
 				_, _ = s.db.Exec(`UPDATE campaign_recipients SET send_status='failed',failure_reason=? WHERE id=?`, err.Error(), rec.ID)
 				failed++
 				continue
 			}
-			qrHTML = template.HTML(tracker.QRCodeHTMLWithSourceAndIndex(baseURL, sourceToken, markToken, eventScope+":qrcode"))
+			qrHTML = template.HTML(tracker.QRCodeHTMLWithSourceAndIndex(baseURL, sourceToken, markToken, eventScope+":image:qr"))
 		}
 		data := mailer.Personalization{
 			BaseURL:   baseURL,
@@ -956,8 +956,8 @@ func (s *Server) campaignStats(c *gin.Context) {
 					WHERE click_marks.campaign_recipient_id=cr.id AND click_events.kind='click'
 				) click_count
 			FROM campaign_recipients cr
-			LEFT JOIN tracking_marks tm ON tm.campaign_recipient_id=cr.id AND tm.kind='qrcode'
-			LEFT JOIN tracking_mark_events tme ON tme.mark_id=tm.id AND tme.kind='qrcode'
+				LEFT JOIN tracking_marks tm ON tm.campaign_recipient_id=cr.id AND tm.kind='image'
+				LEFT JOIN tracking_mark_events tme ON tme.mark_id=tm.id AND tme.kind='image'
 			WHERE cr.campaign_id=?
 			GROUP BY cr.id
 		)`, id).
@@ -974,7 +974,7 @@ func (s *Server) campaignStats(c *gin.Context) {
 			trend = append(trend, gin.H{"hour": hour, "count": count})
 		}
 	}
-	qrRows, _ := s.db.Query(`SELECT strftime('%Y-%m-%d %H:00', tme.triggered_at) hour, COUNT(*) FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id WHERE cr.campaign_id=? AND tme.kind='qrcode' GROUP BY hour ORDER BY hour`, id)
+	qrRows, _ := s.db.Query(`SELECT strftime('%Y-%m-%d %H:00', tme.triggered_at) hour, COUNT(*) FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id WHERE cr.campaign_id=? AND tme.kind='image' GROUP BY hour ORDER BY hour`, id)
 	defer closeRows(qrRows)
 	qrTrend := []gin.H{}
 	if qrRows != nil {
@@ -1011,7 +1011,7 @@ func (s *Server) listRecipients(c *gin.Context) {
 				(
 					SELECT latest.ip
 					FROM tracking_mark_events latest
-					WHERE latest.mark_id=tm.id AND latest.kind='qrcode'
+						WHERE latest.mark_id=tm.id AND latest.kind='image'
 					ORDER BY latest.triggered_at DESC, latest.id DESC
 					LIMIT 1
 				),
@@ -1021,7 +1021,7 @@ func (s *Server) listRecipients(c *gin.Context) {
 				(
 					SELECT latest.user_agent
 					FROM tracking_mark_events latest
-					WHERE latest.mark_id=tm.id AND latest.kind='qrcode'
+						WHERE latest.mark_id=tm.id AND latest.kind='image'
 					ORDER BY latest.triggered_at DESC, latest.id DESC
 					LIMIT 1
 				),
@@ -1031,7 +1031,7 @@ func (s *Server) listRecipients(c *gin.Context) {
 				(
 					SELECT latest.forwarded_for
 					FROM tracking_mark_events latest
-					WHERE latest.mark_id=tm.id AND latest.kind='qrcode'
+						WHERE latest.mark_id=tm.id AND latest.kind='image'
 					ORDER BY latest.triggered_at DESC, latest.id DESC
 					LIMIT 1
 				),
@@ -1041,7 +1041,7 @@ func (s *Server) listRecipients(c *gin.Context) {
 				(
 					SELECT latest.source
 					FROM tracking_mark_events latest
-					WHERE latest.mark_id=tm.id AND latest.kind='qrcode'
+						WHERE latest.mark_id=tm.id AND latest.kind='image'
 					ORDER BY latest.triggered_at DESC, latest.id DESC
 					LIMIT 1
 				),
@@ -1051,7 +1051,7 @@ func (s *Server) listRecipients(c *gin.Context) {
 				(
 					SELECT latest.referer
 					FROM tracking_mark_events latest
-					WHERE latest.mark_id=tm.id AND latest.kind='qrcode'
+						WHERE latest.mark_id=tm.id AND latest.kind='image'
 					ORDER BY latest.triggered_at DESC, latest.id DESC
 					LIMIT 1
 				),
@@ -1061,7 +1061,7 @@ func (s *Server) listRecipients(c *gin.Context) {
 				(
 					SELECT latest.accept_language
 					FROM tracking_mark_events latest
-					WHERE latest.mark_id=tm.id AND latest.kind='qrcode'
+						WHERE latest.mark_id=tm.id AND latest.kind='image'
 					ORDER BY latest.triggered_at DESC, latest.id DESC
 					LIMIT 1
 				),
@@ -1071,15 +1071,15 @@ func (s *Server) listRecipients(c *gin.Context) {
 				(
 					SELECT latest.is_prefetch
 					FROM tracking_mark_events latest
-					WHERE latest.mark_id=tm.id AND latest.kind='qrcode'
+						WHERE latest.mark_id=tm.id AND latest.kind='image'
 					ORDER BY latest.triggered_at DESC, latest.id DESC
 					LIMIT 1
 				),
 				0
 			) last_qr_is_prefetch
 		FROM campaign_recipients cr
-		LEFT JOIN tracking_marks tm ON tm.campaign_recipient_id=cr.id AND tm.kind='qrcode'
-		LEFT JOIN tracking_mark_events tme ON tme.mark_id=tm.id AND tme.kind='qrcode'
+		LEFT JOIN tracking_marks tm ON tm.campaign_recipient_id=cr.id AND tm.kind='image'
+		LEFT JOIN tracking_mark_events tme ON tme.mark_id=tm.id AND tme.kind='image'
 		WHERE cr.campaign_id=?
 		GROUP BY cr.id
 		ORDER BY cr.id DESC`, c.Param("id"))
@@ -1789,7 +1789,7 @@ func (s *Server) globalStats(c *gin.Context) {
 		FROM tracking_mark_events tme
 		JOIN tracking_marks tm ON tm.id=tme.mark_id
 		JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id `+where, args...).Scan(&stats.TotalClicked)
-	where, args = recipientStatsWhere("cr", since, campaignID, "tme.kind='qrcode'", "tme.is_prefetch=0")
+	where, args = recipientStatsWhere("cr", since, campaignID, "tme.kind='image'", "tme.is_prefetch=0")
 	_ = s.db.QueryRow(`
 		SELECT COUNT(DISTINCT tm.id)
 		FROM tracking_mark_events tme
@@ -1934,7 +1934,7 @@ func (s *Server) abStats(c *gin.Context) {
 				COALESCE(SUM(rg.send_status='sent'), 0),
 				COALESCE(SUM(rg.open_count>0), 0),
 				COALESCE((SELECT COUNT(*) FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id WHERE tm.campaign_recipient_id=rg.id AND tme.kind='click'), 0),
-				COALESCE((SELECT COUNT(*) FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id WHERE tm.campaign_recipient_id=rg.id AND tme.kind='qrcode' AND tme.is_prefetch=0), 0)
+					COALESCE((SELECT COUNT(*) FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id WHERE tm.campaign_recipient_id=rg.id AND tme.kind='image' AND tme.is_prefetch=0), 0)
 			FROM campaign_recipients rg WHERE rg.campaign_id=? AND rg.variant_id=?`, campaignID, vid).
 			Scan(&stats.Sent, &stats.Opened, &stats.Clicked, &stats.QRLoaded)
 		results = append(results, gin.H{

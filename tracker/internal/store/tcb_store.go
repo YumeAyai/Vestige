@@ -1,4 +1,4 @@
-package scftracking
+package store
 
 import (
 	"context"
@@ -6,12 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"nousmail/tracking-server/internal/trackingcloud"
+	"Vestige/tracker/internal/model"
 
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/profile"
@@ -37,7 +38,7 @@ type TCBConfig struct {
 }
 
 type tcbEventDoc struct {
-	ID             int64  `json:"id"`
+	ID             any    `json:"id"`
 	Source         string `json:"source"`
 	Campaign       string `json:"campaign"`
 	Link           string `json:"link"`
@@ -62,6 +63,23 @@ type tcbAssetDoc struct {
 	CreatedAt   string `json:"created_at"`
 }
 
+type createIndexesCommandBody struct {
+	CreateIndexes string           `json:"createIndexes"`
+	Indexes       []map[string]any `json:"indexes"`
+}
+
+type insertCommandBody struct {
+	Insert    string `json:"insert"`
+	Documents []any  `json:"documents"`
+}
+
+type findCommandBody struct {
+	Find   string         `json:"find"`
+	Filter map[string]any `json:"filter"`
+	Sort   map[string]any `json:"sort,omitempty"`
+	Limit  int64          `json:"limit"`
+}
+
 func NewTCBStore(ctx context.Context, cfg TCBConfig) (*TCBStore, error) {
 	if strings.TrimSpace(cfg.EnvID) == "" {
 		return nil, errors.New("TCB_ENV_ID is required")
@@ -75,7 +93,7 @@ func NewTCBStore(ctx context.Context, cfg TCBConfig) (*TCBStore, error) {
 	if strings.TrimSpace(cfg.AssetsCollection) == "" {
 		cfg.AssetsCollection = "tracking_assets"
 	}
-	credential, err := common.DefaultProviderChain().GetCredential()
+	credential, err := tcbCredentialFromEnv()
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +102,29 @@ func NewTCBStore(ctx context.Context, cfg TCBConfig) (*TCBStore, error) {
 		return nil, err
 	}
 	store := NewTCBStoreWithClient(client, cfg)
-	return store, store.EnsureIndexes(ctx)
+	return store, nil
+}
+
+func tcbCredentialFromEnv() (common.CredentialIface, error) {
+	secretID := firstEnv("TENCENTCLOUD_SECRET_ID", "TENCENTCLOUD_SECRETID")
+	secretKey := firstEnv("TENCENTCLOUD_SECRET_KEY", "TENCENTCLOUD_SECRETKEY")
+	token := firstEnv("TENCENTCLOUD_TOKEN", "TENCENTCLOUD_SESSIONTOKEN")
+	if secretID != "" && secretKey != "" {
+		if token != "" {
+			return common.NewTokenCredential(secretID, secretKey, token), nil
+		}
+		return common.NewCredential(secretID, secretKey), nil
+	}
+	return common.DefaultProviderChain().GetCredential()
+}
+
+func firstEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func NewTCBStoreWithClient(client runCommandsClient, cfg TCBConfig) *TCBStore {
@@ -99,7 +139,7 @@ func NewTCBStoreWithClient(client runCommandsClient, cfg TCBConfig) *TCBStore {
 func (s *TCBStore) EnsureIndexes(ctx context.Context) error {
 	commands := []struct {
 		table string
-		body  map[string]any
+		body  any
 	}{
 		{s.events, createIndexesCommand(s.events, []map[string]any{
 			{"key": map[string]any{"id": 1}, "name": "id_1", "unique": true},
@@ -111,9 +151,6 @@ func (s *TCBStore) EnsureIndexes(ctx context.Context) error {
 		{s.assets, createIndexesCommand(s.assets, []map[string]any{
 			{"key": map[string]any{"name": 1}, "name": "name_1", "unique": true},
 		})},
-		{"tracking_counters", createIndexesCommand("tracking_counters", []map[string]any{
-			{"key": map[string]any{"_id": 1}, "name": "_id_1", "unique": true},
-		})},
 	}
 	for _, command := range commands {
 		if _, err := s.runCommand(ctx, command.table, "COMMAND", command.body); err != nil && !indexAlreadyExists(err) {
@@ -123,15 +160,12 @@ func (s *TCBStore) EnsureIndexes(ctx context.Context) error {
 	return nil
 }
 
-func (s *TCBStore) RecordEvent(ctx context.Context, event trackingcloud.Event) (int64, error) {
+func (s *TCBStore) RecordEvent(ctx context.Context, event model.Event) (int64, error) {
 	if event.Token == "" && event.Campaign == "" {
 		return 0, nil
 	}
-	id, err := s.nextID(ctx, "tracking_events")
-	if err != nil {
-		return 0, err
-	}
 	triggeredAt := parseEventTime(event.TriggeredAt)
+	id := triggeredAt.UnixNano()
 	event.ID = id
 	event.TriggeredAt = triggeredAt.UTC().Format(time.RFC3339)
 	raw, _ := json.Marshal(event)
@@ -151,9 +185,9 @@ func (s *TCBStore) RecordEvent(ctx context.Context, event trackingcloud.Event) (
 		RawPayload:     string(raw),
 		TriggeredAt:    event.TriggeredAt,
 	}
-	_, err = s.runCommand(ctx, s.events, "INSERT", map[string]any{
-		"insert":    s.events,
-		"documents": []any{doc},
+	_, err := s.runCommand(ctx, s.events, "COMMAND", insertCommandBody{
+		Insert:    s.events,
+		Documents: []any{doc},
 	})
 	if err != nil {
 		return 0, err
@@ -161,7 +195,7 @@ func (s *TCBStore) RecordEvent(ctx context.Context, event trackingcloud.Event) (
 	return id, nil
 }
 
-func (s *TCBStore) ListEvents(ctx context.Context, filter EventFilter) ([]trackingcloud.Event, error) {
+func (s *TCBStore) ListEvents(ctx context.Context, filter model.EventFilter) ([]model.Event, error) {
 	limit := filter.Limit
 	if limit <= 0 || limit > 5000 {
 		limit = 500
@@ -170,10 +204,10 @@ func (s *TCBStore) ListEvents(ctx context.Context, filter EventFilter) ([]tracki
 	if err != nil {
 		return nil, err
 	}
-	items := make([]trackingcloud.Event, 0, len(docs))
+	items := make([]model.Event, 0, len(docs))
 	for _, raw := range docs {
 		var doc tcbEventDoc
-		if err := json.Unmarshal(raw, &doc); err != nil {
+		if err := unmarshalTCBDoc(raw, &doc); err != nil {
 			return nil, err
 		}
 		items = append(items, eventFromTCBDoc(doc))
@@ -181,11 +215,11 @@ func (s *TCBStore) ListEvents(ctx context.Context, filter EventFilter) ([]tracki
 	return items, nil
 }
 
-func (s *TCBStore) Stats(ctx context.Context, filter EventFilter) (StatsResult, error) {
+func (s *TCBStore) Stats(ctx context.Context, filter model.EventFilter) (model.StatsResult, error) {
 	filter.Limit = 5000
 	items, err := s.ListEvents(ctx, filter)
 	if err != nil {
-		return StatsResult{}, err
+		return model.StatsResult{}, err
 	}
 	byKind := map[string]struct {
 		Count  int
@@ -232,10 +266,10 @@ func (s *TCBStore) Stats(ctx context.Context, filter EventFilter) (StatsResult, 
 			trendRows = append(trendRows, map[string]any{"hour": hour, "kind": kind, "count": trend[hour][kind]})
 		}
 	}
-	return StatsResult{Summary: summary, Trend: trendRows}, nil
+	return model.StatsResult{Summary: summary, Trend: trendRows}, nil
 }
 
-func (s *TCBStore) SaveAsset(ctx context.Context, asset Asset) error {
+func (s *TCBStore) SaveAsset(ctx context.Context, asset model.Asset) error {
 	if asset.CreatedAt.IsZero() {
 		asset.CreatedAt = time.Now().UTC()
 	}
@@ -247,30 +281,30 @@ func (s *TCBStore) SaveAsset(ctx context.Context, asset Asset) error {
 		Width:       asset.Width,
 		CreatedAt:   asset.CreatedAt.UTC().Format(time.RFC3339),
 	}
-	_, err := s.runCommand(ctx, s.assets, "INSERT", map[string]any{
-		"insert":    s.assets,
-		"documents": []any{doc},
+	_, err := s.runCommand(ctx, s.assets, "COMMAND", insertCommandBody{
+		Insert:    s.assets,
+		Documents: []any{doc},
 	})
 	return err
 }
 
-func (s *TCBStore) GetAsset(ctx context.Context, name string) (Asset, error) {
+func (s *TCBStore) GetAsset(ctx context.Context, name string) (model.Asset, error) {
 	docs, err := s.find(ctx, s.assets, map[string]any{"name": name}, map[string]any{}, 1)
 	if err != nil {
-		return Asset{}, err
+		return model.Asset{}, err
 	}
 	if len(docs) == 0 {
-		return Asset{}, ErrNotFound
+		return model.Asset{}, ErrNotFound
 	}
 	var doc tcbAssetDoc
-	if err := json.Unmarshal(docs[0], &doc); err != nil {
-		return Asset{}, err
+	if err := unmarshalTCBDoc(docs[0], &doc); err != nil {
+		return model.Asset{}, err
 	}
 	data, err := base64.StdEncoding.DecodeString(doc.DataBase64)
 	if err != nil {
-		return Asset{}, err
+		return model.Asset{}, err
 	}
-	return Asset{
+	return model.Asset{
 		Name:        doc.Name,
 		Label:       doc.Label,
 		ContentType: doc.ContentType,
@@ -280,41 +314,16 @@ func (s *TCBStore) GetAsset(ctx context.Context, name string) (Asset, error) {
 	}, nil
 }
 
-func (s *TCBStore) nextID(ctx context.Context, name string) (int64, error) {
-	results, err := s.runCommand(ctx, "tracking_counters", "UPDATE", map[string]any{
-		"findAndModify": "tracking_counters",
-		"query":         map[string]any{"_id": name},
-		"update":        map[string]any{"$inc": map[string]any{"seq": 1}},
-		"upsert":        true,
-		"new":           true,
-	})
-	if err != nil {
-		return 0, err
-	}
-	for _, raw := range results {
-		var payload struct {
-			Value map[string]any `json:"value"`
-		}
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			continue
-		}
-		if seq, ok := int64Value(payload.Value["seq"]); ok {
-			return seq, nil
-		}
-	}
-	return 0, errors.New("tcb counter response missing value.seq")
-}
-
 func (s *TCBStore) find(ctx context.Context, table string, filter map[string]any, sortFields map[string]any, limit int64) ([]json.RawMessage, error) {
-	command := map[string]any{
-		"find":   table,
-		"filter": filter,
-		"limit":  limit,
+	command := findCommandBody{
+		Find:   table,
+		Filter: filter,
+		Limit:  limit,
 	}
 	if len(sortFields) > 0 {
-		command["sort"] = sortFields
+		command.Sort = sortFields
 	}
-	results, err := s.runCommand(ctx, table, "QUERY", command)
+	results, err := s.runCommand(ctx, table, "COMMAND", command)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +359,7 @@ func (s *TCBStore) runCommand(ctx context.Context, table, commandType string, co
 	return results, nil
 }
 
-func tcbFilter(filter EventFilter) map[string]any {
+func tcbFilter(filter model.EventFilter) map[string]any {
 	result := map[string]any{}
 	if filter.Source != "" {
 		result["source"] = filter.Source
@@ -410,9 +419,21 @@ func commandDocuments(results []json.RawMessage) ([]json.RawMessage, error) {
 	return docs, nil
 }
 
-func eventFromTCBDoc(doc tcbEventDoc) trackingcloud.Event {
-	return trackingcloud.Event{
-		ID:             doc.ID,
+func unmarshalTCBDoc(raw json.RawMessage, target any) error {
+	if err := json.Unmarshal(raw, target); err == nil {
+		return nil
+	}
+	var encoded string
+	if err := json.Unmarshal(raw, &encoded); err != nil {
+		return err
+	}
+	return json.Unmarshal([]byte(encoded), target)
+}
+
+func eventFromTCBDoc(doc tcbEventDoc) model.Event {
+	id, _ := int64Value(doc.ID)
+	return model.Event{
+		ID:             id,
 		Source:         doc.Source,
 		Campaign:       doc.Campaign,
 		Link:           doc.Link,
@@ -428,8 +449,8 @@ func eventFromTCBDoc(doc tcbEventDoc) trackingcloud.Event {
 	}
 }
 
-func createIndexesCommand(table string, indexes []map[string]any) map[string]any {
-	return map[string]any{"createIndexes": table, "indexes": indexes}
+func createIndexesCommand(table string, indexes []map[string]any) createIndexesCommandBody {
+	return createIndexesCommandBody{CreateIndexes: table, Indexes: indexes}
 }
 
 func indexAlreadyExists(err error) bool {
@@ -451,6 +472,13 @@ func int64Value(value any) (int64, bool) {
 	case string:
 		parsed, err := strconv.ParseInt(v, 10, 64)
 		return parsed, err == nil
+	case map[string]any:
+		for _, key := range []string{"$numberLong", "$numberInt", "$numberDouble"} {
+			if parsed, ok := int64Value(v[key]); ok {
+				return parsed, true
+			}
+		}
+		return 0, false
 	default:
 		return 0, false
 	}
@@ -466,4 +494,15 @@ func tcbValueOr(value, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func parseEventTime(value string) time.Time {
+	if value == "" {
+		return time.Now()
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Now()
+	}
+	return parsed
 }

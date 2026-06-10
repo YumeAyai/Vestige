@@ -64,6 +64,9 @@ func TestTrackingURLsIncludeSourceToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if parsed.Path != "/img" {
+		t.Fatalf("unexpected image path: %s", parsed.Path)
+	}
 	if got := parsed.Query().Get("s"); got != "creator-1" {
 		t.Fatalf("unexpected image source: %q", got)
 	}

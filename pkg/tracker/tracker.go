@@ -168,6 +168,7 @@ func MarkImageURLWithSource(baseURL, source, token string, targets ...string) st
 func MarkImageURLWithSourceAndIndex(baseURL, source, token, eventIndex string, targets ...string) string {
 	values := url.Values{}
 	values.Set("token", token)
+	values.Set("type", "qr")
 	if source != "" {
 		values.Set("s", source)
 	}
@@ -177,7 +178,7 @@ func MarkImageURLWithSourceAndIndex(baseURL, source, token, eventIndex string, t
 	if len(targets) > 0 && targets[0] != "" {
 		values.Set("target", targets[0])
 	}
-	return strings.TrimRight(baseURL, "/") + "/qrcode.png?" + values.Encode()
+	return strings.TrimRight(baseURL, "/") + "/img?" + values.Encode()
 }
 
 func AssetImageURL(baseURL, token, asset string) string {
@@ -198,7 +199,7 @@ func AssetImageURLWithSourceAndIndex(baseURL, source, token, asset, eventIndex s
 	if eventIndex != "" {
 		values.Set("i", eventIndex)
 	}
-	return strings.TrimRight(baseURL, "/") + "/qrcode.png?" + values.Encode()
+	return strings.TrimRight(baseURL, "/") + "/img?" + values.Encode()
 }
 
 func QRCodeHTML(baseURL, token string, targets ...string) string {

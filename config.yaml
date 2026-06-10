@@ -5,11 +5,6 @@ local_backend:
   tracking_source_token: ""
   qr_code_target_url: "https://example.com/survey"
 
-tracking_cloud:
-  addr: ":8081"
-  db_path: "data/tracking.db"
-  asset_dir: "data/tracking-assets"
-
 frontend:
   dev_port: 5173
   api_proxy: "http://localhost:8080"
@@ -18,10 +13,5 @@ scf:
   tcb:
     env_id: "xray-7g6vc4y2d2fc01be"
     region: "ap-shanghai"
-    events_collection: "tracking_events"
-    assets_collection: "tracking_assets"
-  mongodb:
-    uri: ""
-    database: "nousmail_tracking"
     events_collection: "tracking_events"
     assets_collection: "tracking_assets"
