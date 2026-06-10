@@ -406,7 +406,33 @@ func requestBaseURL(event model.SCFEvent) string {
 	if host == "" {
 		host = "localhost"
 	}
-	return scheme + "://" + host
+	return scheme + "://" + host + requestMountPrefix(eventPath(event))
+}
+
+func requestMountPrefix(path string) string {
+	path = strings.TrimSpace(path)
+	if idx := strings.Index(path, "?"); idx >= 0 {
+		path = path[:idx]
+	}
+	if path == "" {
+		return ""
+	}
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	for _, route := range []string{"/api/assets", "/api/events", "/api/stats", "/health", "/img", "/p", "/r"} {
+		if path == route {
+			return ""
+		}
+		if strings.HasSuffix(path, route) {
+			prefix := strings.TrimRight(strings.TrimSuffix(path, route), "/")
+			if prefix != "/" {
+				return prefix
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 func header(event model.SCFEvent, key string) string {
