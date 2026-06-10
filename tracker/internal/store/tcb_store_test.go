@@ -1,7 +1,9 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -153,6 +155,25 @@ func TestTCBStoreSaveAssetUsesNameAsID(t *testing.T) {
 	}
 	if body.Documents[0]["_id"] != "asset-1.png" || body.Documents[0]["name"] != "asset-1.png" {
 		t.Fatalf("asset should use stable name id, got %#v", body.Documents[0])
+	}
+}
+
+func TestTCBStoreGetAssetDecodesLegacyBase64Image(t *testing.T) {
+	jpeg := []byte{0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x08}
+	rawEncoded := base64.StdEncoding.EncodeToString(jpeg)
+	encoded := rawEncoded[:6] + `\n` + rawEncoded[6:]
+	client := &fakeRunCommandsClient{results: []string{`{"cursor":{"firstBatch":[{"_id":{"$oid":"6a2963fa41d7c754d223e479"},"name":"legacy.jpg","label":"Legacy","content_type":"application/octet-stream","data_base64":"` + encoded + `","width":176,"created_at":"2026-06-10T13:17:46Z"}]}}`}}
+	store := NewTCBStoreWithClient(client, TCBConfig{EnvID: "env-1", AssetsCollection: "tracking_assets"})
+
+	asset, err := store.GetAsset(context.Background(), "legacy.jpg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if asset.Name != "legacy.jpg" || asset.ContentType != "image/jpeg" {
+		t.Fatalf("unexpected asset metadata: %#v", asset)
+	}
+	if !bytes.Equal(asset.Data, jpeg) {
+		t.Fatalf("unexpected asset data: %x", asset.Data)
 	}
 }
 

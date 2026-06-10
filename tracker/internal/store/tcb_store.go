@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
+	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -55,7 +58,7 @@ type tcbEventDoc struct {
 }
 
 type tcbAssetDoc struct {
-	ID          string `json:"_id,omitempty"`
+	ID          any    `json:"_id,omitempty"`
 	Name        string `json:"name"`
 	Label       string `json:"label"`
 	ContentType string `json:"content_type"`
@@ -308,14 +311,18 @@ func (s *TCBStore) GetAsset(ctx context.Context, name string) (model.Asset, erro
 	if err := unmarshalTCBDoc(docs[0], &doc); err != nil {
 		return model.Asset{}, err
 	}
-	data, err := base64.StdEncoding.DecodeString(doc.DataBase64)
+	data, err := decodeAssetData(doc.DataBase64)
 	if err != nil {
 		return model.Asset{}, err
 	}
+	assetName := strings.TrimSpace(doc.Name)
+	if assetName == "" {
+		assetName = stringValue(doc.ID)
+	}
 	return model.Asset{
-		Name:        doc.Name,
+		Name:        assetName,
 		Label:       doc.Label,
-		ContentType: doc.ContentType,
+		ContentType: assetContentType(doc.ContentType, assetName, data),
 		Data:        data,
 		Width:       doc.Width,
 		CreatedAt:   parseEventTime(doc.CreatedAt),
@@ -481,6 +488,39 @@ func eventFromTCBDoc(doc tcbEventDoc) model.Event {
 	}
 }
 
+func decodeAssetData(value string) ([]byte, error) {
+	value = strings.TrimSpace(value)
+	if idx := strings.Index(value, ","); idx >= 0 && strings.HasPrefix(strings.ToLower(value[:idx]), "data:") {
+		value = value[idx+1:]
+	}
+	value = strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\n', '\r', '\t':
+			return -1
+		default:
+			return r
+		}
+	}, value)
+	return base64.StdEncoding.DecodeString(value)
+}
+
+func assetContentType(stored, name string, data []byte) string {
+	stored = strings.TrimSpace(stored)
+	if stored != "" && !strings.EqualFold(stored, "application/octet-stream") {
+		return stored
+	}
+	if detected := http.DetectContentType(data); strings.HasPrefix(detected, "image/") {
+		return detected
+	}
+	if extType := mime.TypeByExtension(filepath.Ext(name)); extType != "" {
+		return extType
+	}
+	if stored != "" {
+		return stored
+	}
+	return "application/octet-stream"
+}
+
 func createIndexesCommand(table string, indexes []map[string]any) createIndexesCommandBody {
 	return createIndexesCommandBody{CreateIndexes: table, Indexes: indexes}
 }
@@ -514,6 +554,20 @@ func int64Value(value any) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func stringValue(value any) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case map[string]any:
+		for _, key := range []string{"$oid", "oid", "$uuid", "uuid"} {
+			if value, ok := v[key].(string); ok {
+				return value
+			}
+		}
+	}
+	return ""
 }
 
 func strPtr(value string) *string {
