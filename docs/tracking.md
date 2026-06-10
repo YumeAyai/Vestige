@@ -75,7 +75,7 @@ tracking-server/cmd/scf
 - `GET /api/events`
 - `POST /api/assets`
 
-SCF 版不依赖本地磁盘，数据写入腾讯云文档数据库 MongoDB：
+SCF 版不依赖本地磁盘，数据通过腾讯云 TCB OpenAPI `RunCommands` 写入 CloudBase 文档型数据库：
 
 - `tracking_events`：匿名 open/click/qrcode 事件，包含自增 `id`，本地同步仍使用 `after_id` 游标。
 - `tracking_assets`：上传后的图片埋点资产，邮件客户端访问 `/qrcode.png?asset=...` 时从文档数据库读取。
@@ -85,10 +85,12 @@ SCF 环境变量：
 
 | 环境变量 | 含义 |
 | :--- | :--- |
-| `MONGODB_URI` | 文档数据库 MongoDB 连接串 |
-| `MONGODB_DATABASE` | 数据库名，默认 `nousmail_tracking` |
-| `MONGODB_EVENTS_COLLECTION` | 事件集合名，默认 `tracking_events` |
-| `MONGODB_ASSETS_COLLECTION` | 图片资产集合名，默认 `tracking_assets` |
+| `TCB_ENV_ID` | 云开发环境 ID |
+| `TCB_REGION` | 腾讯云地域，默认 `ap-shanghai` |
+| `TCB_EVENTS_COLLECTION` | 事件集合名，默认 `tracking_events` |
+| `TCB_ASSETS_COLLECTION` | 图片资产集合名，默认 `tracking_assets` |
+| `TENCENTCLOUD_SECRET_ID` | 调用 TCB OpenAPI 的 SecretId |
+| `TENCENTCLOUD_SECRET_KEY` | 调用 TCB OpenAPI 的 SecretKey |
 
 ## URL 契约
 
@@ -120,8 +122,11 @@ SCF 环境变量：
 | `l` / `link` | 用户本地生成的 link id |
 | `rid` / `token` | 用户本地生成的随机匿名 token |
 | `s` / `source` | 可选，用户或租户前缀 |
+| `i` / `idx` / `event_index` | 可选，具体触发点索引，例如 `variant:12:open`、`variant:12:image:qr.png`、`variant:12:link:hero` |
 | `dest` | 点击事件的最终跳转地址，仅允许 http/https |
 | `target` | 二维码 PNG 中编码的目标地址，仅允许 http/https |
+
+`event_index` 用于区分同一收件人在同一邮件中的不同触发点。AB 测试发送时会自动带上变体信息；没有 AB 变体时使用 `campaign:<id>:...`。
 
 ## 匿名事件查询
 

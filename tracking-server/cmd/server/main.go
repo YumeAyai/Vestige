@@ -2,9 +2,11 @@ package main
 
 import (
 	"log"
+	"net/http"
 
 	"nousmail/pkg/config"
 	"nousmail/pkg/db"
+	"nousmail/tracking-server/internal/scftracking"
 	"nousmail/tracking-server/internal/trackingcloud"
 )
 
@@ -24,8 +26,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	server := trackingcloud.NewWithOptions(store, trackingcloud.Options{AssetDir: cfg.TrackingCloud.AssetDir})
-	if err := server.Run(cfg.TrackingCloud.Addr); err != nil {
+	server := scftracking.NewHTTPHandler(scftracking.NewSQLiteStore(store, scftracking.SQLiteConfig{AssetDir: cfg.TrackingCloud.AssetDir}))
+	if err := http.ListenAndServe(cfg.TrackingCloud.Addr, server); err != nil {
 		log.Fatal(err)
 	}
 }

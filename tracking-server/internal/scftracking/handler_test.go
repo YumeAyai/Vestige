@@ -102,6 +102,7 @@ func TestPixelRecordsEventAndReturnsGIF(t *testing.T) {
 			"s":   {"tenant"},
 			"c":   {"1"},
 			"rid": {"abc"},
+			"i":   {"variant:1:open"},
 		},
 		Headers: map[string]string{"User-Agent": "Mail", "X-Forwarded-For": "203.0.113.10"},
 		Context: events.APIGatewayRequestContext{SourceIP: "198.51.100.8"},
@@ -119,8 +120,33 @@ func TestPixelRecordsEventAndReturnsGIF(t *testing.T) {
 	if event.Kind != "open" || event.Source != "tenant" || event.Campaign != "1" || event.Token != "abc" {
 		t.Fatalf("unexpected event: %#v", event)
 	}
+	if event.EventIndex != "variant:1:open" {
+		t.Fatalf("unexpected event index: %#v", event)
+	}
 	if event.IP != "198.51.100.8" || event.ForwardedFor != "203.0.113.10" {
 		t.Fatalf("unexpected ip fields: %#v", event)
+	}
+}
+
+func TestMountedFunctionPathRecordsPixel(t *testing.T) {
+	store := newMemoryStore()
+	h := NewHandler(store)
+	resp, err := h.Handle(context.Background(), events.APIGatewayRequest{
+		Method: "GET",
+		Path:   "/jianji/p",
+		QueryString: events.APIGatewayQueryString{
+			"c":   {"1"},
+			"rid": {"abc"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || resp.Headers["Content-Type"] != "image/gif" {
+		t.Fatalf("unexpected mounted pixel response: %#v", resp)
+	}
+	if len(store.events) != 1 || store.events[0].Kind != "open" {
+		t.Fatalf("unexpected mounted pixel events: %#v", store.events)
 	}
 }
 

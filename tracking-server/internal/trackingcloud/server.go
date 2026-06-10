@@ -28,6 +28,7 @@ type Event struct {
 	Source         string `json:"source"`
 	Campaign       string `json:"campaign"`
 	Link           string `json:"link"`
+	EventIndex     string `json:"event_index,omitempty"`
 	Token          string `json:"token"`
 	Kind           string `json:"kind"`
 	TriggeredAt    string `json:"triggered_at"`
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS tracking_events (
   source TEXT NOT NULL DEFAULT '',
   campaign TEXT NOT NULL DEFAULT '',
   link TEXT NOT NULL DEFAULT '',
+  event_index TEXT NOT NULL DEFAULT '',
   token TEXT NOT NULL DEFAULT '',
   kind TEXT NOT NULL,
   ip TEXT NOT NULL DEFAULT '',
@@ -64,6 +66,7 @@ CREATE INDEX IF NOT EXISTS idx_tracking_events_source_cursor ON tracking_events(
 	}
 	return addColumns(conn, "tracking_events", map[string]string{
 		"forwarded_for": "TEXT NOT NULL DEFAULT ''",
+		"event_index":   "TEXT NOT NULL DEFAULT ''",
 	})
 }
 
@@ -278,7 +281,7 @@ func (s *Server) events(c *gin.Context) {
 	}
 	args = append(args, limit)
 	rows, err := s.db.Query(`
-		SELECT id,source,campaign,link,token,kind,triggered_at,ip,user_agent,referer,accept_language,forwarded_for
+		SELECT id,source,campaign,link,event_index,token,kind,triggered_at,ip,user_agent,referer,accept_language,forwarded_for
 		FROM tracking_events `+where+`
 		ORDER BY id ASC
 		LIMIT ?`, args...)
@@ -290,7 +293,7 @@ func (s *Server) events(c *gin.Context) {
 	items := []Event{}
 	for rows.Next() {
 		var item Event
-		if err := rows.Scan(&item.ID, &item.Source, &item.Campaign, &item.Link, &item.Token, &item.Kind, &item.TriggeredAt, &item.IP, &item.UserAgent, &item.Referer, &item.AcceptLanguage, &item.ForwardedFor); err != nil {
+		if err := rows.Scan(&item.ID, &item.Source, &item.Campaign, &item.Link, &item.EventIndex, &item.Token, &item.Kind, &item.TriggeredAt, &item.IP, &item.UserAgent, &item.Referer, &item.AcceptLanguage, &item.ForwardedFor); err != nil {
 			fail(c, err)
 			return
 		}
@@ -307,6 +310,7 @@ func (s *Server) record(c *gin.Context, event Event) error {
 		"source":          event.Source,
 		"campaign":        event.Campaign,
 		"link":            event.Link,
+		"event_index":     event.EventIndex,
 		"token":           event.Token,
 		"kind":            event.Kind,
 		"ip":              event.IP,
@@ -316,10 +320,11 @@ func (s *Server) record(c *gin.Context, event Event) error {
 		"forwarded_for":   event.ForwardedFor,
 	})
 	_, err := s.db.Exec(
-		`INSERT INTO tracking_events(source,campaign,link,token,kind,ip,user_agent,referer,accept_language,forwarded_for,raw_payload) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO tracking_events(source,campaign,link,event_index,token,kind,ip,user_agent,referer,accept_language,forwarded_for,raw_payload) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
 		event.Source,
 		event.Campaign,
 		event.Link,
+		event.EventIndex,
 		event.Token,
 		event.Kind,
 		event.IP,
@@ -337,6 +342,7 @@ func eventFromRequest(c *gin.Context, kind string) Event {
 		Source:         firstNonEmpty(c.Query("s"), c.Query("source")),
 		Campaign:       firstNonEmpty(c.Query("c"), c.Query("campaign")),
 		Link:           firstNonEmpty(c.Query("l"), c.Query("link")),
+		EventIndex:     firstNonEmpty(c.Query("i"), c.Query("idx"), c.Query("index"), c.Query("event_index"), c.Query("l"), c.Query("link"), c.Query("asset")),
 		Token:          firstNonEmpty(c.Query("rid"), c.Query("tid"), c.Query("token")),
 		Kind:           kind,
 		IP:             c.ClientIP(),

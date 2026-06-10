@@ -7,6 +7,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.112
+	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/tcb v1.3.112
 	github.com/tencentyun/scf-go-lib v0.0.0-20230904103145-13c9a7eeca80
 	github.com/xuri/excelize/v2 v2.10.1
 	go.mongodb.org/mongo-driver v1.17.6

@@ -37,11 +37,19 @@ type FrontendConfig struct {
 
 type SCFConfig struct {
 	MongoDB MongoDBConfig `yaml:"mongodb"`
+	TCB     TCBConfig     `yaml:"tcb"`
 }
 
 type MongoDBConfig struct {
 	URI              string `yaml:"uri"`
 	Database         string `yaml:"database"`
+	EventsCollection string `yaml:"events_collection"`
+	AssetsCollection string `yaml:"assets_collection"`
+}
+
+type TCBConfig struct {
+	EnvID            string `yaml:"env_id"`
+	Region           string `yaml:"region"`
 	EventsCollection string `yaml:"events_collection"`
 	AssetsCollection string `yaml:"assets_collection"`
 }
@@ -66,6 +74,11 @@ func Default() Config {
 		SCF: SCFConfig{
 			MongoDB: MongoDBConfig{
 				Database:         "nousmail_tracking",
+				EventsCollection: "tracking_events",
+				AssetsCollection: "tracking_assets",
+			},
+			TCB: TCBConfig{
+				Region:           "ap-shanghai",
 				EventsCollection: "tracking_events",
 				AssetsCollection: "tracking_assets",
 			},
@@ -120,6 +133,10 @@ func applyEnv(cfg *Config) {
 	setString(&cfg.SCF.MongoDB.Database, "MONGODB_DATABASE")
 	setString(&cfg.SCF.MongoDB.EventsCollection, "MONGODB_EVENTS_COLLECTION")
 	setString(&cfg.SCF.MongoDB.AssetsCollection, "MONGODB_ASSETS_COLLECTION")
+	setString(&cfg.SCF.TCB.EnvID, "TCB_ENV_ID")
+	setString(&cfg.SCF.TCB.Region, "TCB_REGION")
+	setString(&cfg.SCF.TCB.EventsCollection, "TCB_EVENTS_COLLECTION")
+	setString(&cfg.SCF.TCB.AssetsCollection, "TCB_ASSETS_COLLECTION")
 }
 
 func setString(target *string, key string) {

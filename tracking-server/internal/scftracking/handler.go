@@ -248,6 +248,7 @@ func eventFromRequest(req events.APIGatewayRequest, kind string, now time.Time) 
 		Source:         firstNonEmpty(query(req, "s"), query(req, "source")),
 		Campaign:       firstNonEmpty(query(req, "c"), query(req, "campaign")),
 		Link:           firstNonEmpty(query(req, "l"), query(req, "link")),
+		EventIndex:     firstNonEmpty(query(req, "i"), query(req, "idx"), query(req, "index"), query(req, "event_index"), query(req, "l"), query(req, "link"), query(req, "asset")),
 		Token:          firstNonEmpty(query(req, "rid"), query(req, "tid"), query(req, "token")),
 		Kind:           kind,
 		TriggeredAt:    now.UTC().Format(time.RFC3339),
@@ -283,12 +284,25 @@ func normalizePath(values ...string) string {
 		if value == "" {
 			continue
 		}
+		if idx := strings.Index(value, "?"); idx >= 0 {
+			value = value[:idx]
+		}
 		if !strings.HasPrefix(value, "/") {
 			value = "/" + value
 		}
-		return value
+		return mountedRoute(value)
 	}
 	return "/"
+}
+
+func mountedRoute(value string) string {
+	routes := []string{"/health", "/p", "/r", "/qrcode.png", "/api/events", "/api/stats", "/api/assets"}
+	for _, route := range routes {
+		if value == route || strings.HasSuffix(value, route) {
+			return route
+		}
+	}
+	return value
 }
 
 func requestBaseURL(req events.APIGatewayRequest) string {

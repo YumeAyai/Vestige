@@ -24,6 +24,14 @@ func TestTrackingURLsTrimBaseAndEncodeQuery(t *testing.T) {
 	if got := parsed.Query().Get("c"); got != "camp&1" {
 		t.Fatalf("unexpected campaign: %q", got)
 	}
+	pixel = PixelURLWithSource("https://track.example.com", "creator-1", "rid", "campaign", "variant:1:open")
+	parsed, err = url.Parse(pixel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parsed.Query().Get("i"); got != "variant:1:open" {
+		t.Fatalf("unexpected event index: %q", got)
+	}
 
 	redirect := RedirectURL("https://track.example.com///", "42", "hero", "rid", "https://example.com/a?x=1&y=2")
 	parsed, err = url.Parse(redirect)
@@ -35,6 +43,9 @@ func TestTrackingURLsTrimBaseAndEncodeQuery(t *testing.T) {
 	}
 	if got := parsed.Query().Get("dest"); got != "https://example.com/a?x=1&y=2" {
 		t.Fatalf("unexpected dest: %q", got)
+	}
+	if got := parsed.Query().Get("i"); got != "hero" {
+		t.Fatalf("unexpected redirect event index: %q", got)
 	}
 }
 
@@ -55,6 +66,9 @@ func TestTrackingURLsIncludeSourceToken(t *testing.T) {
 	}
 	if got := parsed.Query().Get("s"); got != "creator-1" {
 		t.Fatalf("unexpected image source: %q", got)
+	}
+	if got := parsed.Query().Get("i"); got != "qr.png" {
+		t.Fatalf("unexpected image event index: %q", got)
 	}
 }
 

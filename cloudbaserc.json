@@ -1,0 +1,24 @@
+{
+  "$schema": "https://static.cloudbase.net/cli/cloudbaserc.schema.json",
+  "envId": "xray-7g6vc4y2d2fc01be",
+  "region": "ap-shanghai",
+  "functionRoot": "functions",
+  "functions": [
+    {
+      "name": "jianji",
+      "description": "Nous Mail tracking HTTP function",
+      "type": "HTTP",
+      "runtime": "Go1",
+      "handler": "main",
+      "dir": "tracking-server",
+      "timeout": 15,
+      "memorySize": 256,
+      "envVariables": {
+        "TCB_ENV_ID": "xray-7g6vc4y2d2fc01be",
+        "TCB_REGION": "ap-shanghai",
+        "TCB_EVENTS_COLLECTION": "tracking_events",
+        "TCB_ASSETS_COLLECTION": "tracking_assets"
+      }
+    }
+  ]
+}

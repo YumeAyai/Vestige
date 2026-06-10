@@ -92,6 +92,7 @@ CREATE TABLE IF NOT EXISTS open_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   campaign_recipient_id INTEGER NOT NULL,
   tracking_id TEXT NOT NULL,
+  event_index TEXT NOT NULL DEFAULT '',
   ip TEXT NOT NULL DEFAULT '',
   user_agent TEXT NOT NULL DEFAULT '',
   is_prefetch INTEGER NOT NULL DEFAULT 0,
@@ -115,6 +116,7 @@ CREATE TABLE IF NOT EXISTS tracking_mark_events (
   mark_id INTEGER,
   token TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT '',
+  event_index TEXT NOT NULL DEFAULT '',
   source TEXT NOT NULL DEFAULT 'local',
   ip TEXT NOT NULL DEFAULT '',
   user_agent TEXT NOT NULL DEFAULT '',
@@ -156,9 +158,15 @@ CREATE TABLE IF NOT EXISTS app_settings (
 		"referer":         "TEXT NOT NULL DEFAULT ''",
 		"accept_language": "TEXT NOT NULL DEFAULT ''",
 		"forwarded_for":   "TEXT NOT NULL DEFAULT ''",
+		"event_index":     "TEXT NOT NULL DEFAULT ''",
 		"is_prefetch":     "INTEGER NOT NULL DEFAULT 0",
 	})
 	if err != nil {
+		return err
+	}
+	if err := addColumns(conn, "open_events", map[string]string{
+		"event_index": "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
 		return err
 	}
 	if err := addColumns(conn, "templates", map[string]string{

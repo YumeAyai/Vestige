@@ -563,6 +563,7 @@ func (s *Server) trackingImage(c *gin.Context) {
 		raw, _ := json.Marshal(gin.H{
 			"token":           token,
 			"kind":            "qrcode",
+			"event_index":     trackingEventIndexFromQuery(c),
 			"asset":           c.Query("asset"),
 			"ip":              c.ClientIP(),
 			"user_agent":      c.GetHeader("User-Agent"),
@@ -573,6 +574,7 @@ func (s *Server) trackingImage(c *gin.Context) {
 		_ = tracker.NewSQLiteRecorder(s.db).RecordMark(tracker.MarkEvent{
 			Token:          token,
 			Kind:           "qrcode",
+			EventIndex:     trackingEventIndexFromQuery(c),
 			Source:         "local",
 			IP:             c.ClientIP(),
 			UserAgent:      c.GetHeader("User-Agent"),
@@ -780,6 +782,7 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 		contact := target.contact
 		subjectTemplate := firstNonEmpty(target.variant.Subject, campaign.Subject)
 		bodyTemplate := firstNonEmpty(target.variant.BodyHTML, campaign.BodyHTML)
+		eventScope := campaignEventScope(campaign.ID, target.variant.ID)
 		qrHTML := template.HTML("")
 		var markToken string
 		if templateUsesQRCode(bodyTemplate) || templateUsesTrackingImage(bodyTemplate) {
@@ -789,7 +792,7 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 				failed++
 				continue
 			}
-			qrHTML = template.HTML(tracker.QRCodeHTMLWithSource(baseURL, sourceToken, markToken))
+			qrHTML = template.HTML(tracker.QRCodeHTMLWithSourceAndIndex(baseURL, sourceToken, markToken, eventScope+":qrcode"))
 		}
 		data := mailer.Personalization{
 			BaseURL:   baseURL,
@@ -798,7 +801,7 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 			Campaign:  campaign,
 			QRCode:    qrHTML,
 			TrackingImage: func(asset string) template.HTML {
-				return template.HTML(tracker.TrackingImageHTMLWithSource(baseURL, sourceToken, markToken, asset, "企业微信二维码", 176))
+				return template.HTML(tracker.TrackingImageHTMLWithSourceAndIndex(baseURL, sourceToken, markToken, asset, "企业微信二维码", 176, eventScope+":image:"+asset))
 			},
 		}
 		subject, err := mailer.RenderBody(subjectTemplate, data)
@@ -809,7 +812,7 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 		}
 		body, err := mailer.RenderBody(bodyTemplate, data)
 		if err == nil && campaign.TrackingEnabled {
-			body = tracker.InjectPixelWithSource(body, baseURL, sourceToken, rec.TrackingID, strconv.FormatInt(campaign.ID, 10))
+			body = tracker.InjectPixelWithSourceAndIndex(body, baseURL, sourceToken, rec.TrackingID, strconv.FormatInt(campaign.ID, 10), eventScope+":open")
 		}
 		if err == nil {
 			err = sendMailWithTimeout(mb, rec.Email, rec.Name, subject, body, 20*time.Second)
@@ -1102,6 +1105,7 @@ type cloudTrackingEventInput struct {
 	Source         string `json:"source"`
 	Campaign       string `json:"campaign"`
 	Link           string `json:"link"`
+	EventIndex     string `json:"event_index"`
 	Token          string `json:"token"`
 	Kind           string `json:"kind"`
 	TriggeredAt    string `json:"triggered_at"`
@@ -1441,6 +1445,13 @@ func sendMailWithTimeout(mb models.Mailbox, toEmail, toName, subject, body strin
 	}
 }
 
+func campaignEventScope(campaignID, variantID int64) string {
+	if variantID > 0 {
+		return "variant:" + strconv.FormatInt(variantID, 10)
+	}
+	return "campaign:" + strconv.FormatInt(campaignID, 10)
+}
+
 func closeRows(rows *sql.Rows) {
 	if rows != nil {
 		_ = rows.Close()
@@ -1483,9 +1494,10 @@ func (s *Server) recordCloudOpenEvent(event cloudTrackingEventInput, _ string) e
 	triggeredAt := strings.TrimSpace(event.TriggeredAt)
 	if triggeredAt == "" {
 		_, err := s.db.Exec(
-			`INSERT INTO open_events(campaign_recipient_id,tracking_id,ip,user_agent,is_prefetch) VALUES(?,?,?,?,?)`,
+			`INSERT INTO open_events(campaign_recipient_id,tracking_id,event_index,ip,user_agent,is_prefetch) VALUES(?,?,?,?,?,?)`,
 			recipientID,
 			event.Token,
+			event.EventIndex,
 			event.IP,
 			event.UserAgent,
 			tracker.LooksLikePrefetch(event.UserAgent),
@@ -1495,9 +1507,10 @@ func (s *Server) recordCloudOpenEvent(event cloudTrackingEventInput, _ string) e
 		}
 	} else {
 		_, err := s.db.Exec(
-			`INSERT INTO open_events(campaign_recipient_id,tracking_id,ip,user_agent,is_prefetch,opened_at) VALUES(?,?,?,?,?,?)`,
+			`INSERT INTO open_events(campaign_recipient_id,tracking_id,event_index,ip,user_agent,is_prefetch,opened_at) VALUES(?,?,?,?,?,?,?)`,
 			recipientID,
 			event.Token,
+			event.EventIndex,
 			event.IP,
 			event.UserAgent,
 			tracker.LooksLikePrefetch(event.UserAgent),
@@ -1531,10 +1544,11 @@ func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string)
 	triggeredAt := strings.TrimSpace(event.TriggeredAt)
 	if triggeredAt == "" {
 		_, err := s.db.Exec(
-			`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,referer,accept_language,forwarded_for,is_prefetch,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?)`,
+			`INSERT INTO tracking_mark_events(mark_id,token,kind,event_index,source,ip,user_agent,referer,accept_language,forwarded_for,is_prefetch,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?,?)`,
 			markID,
 			event.Token,
 			kind,
+			event.EventIndex,
 			"cloud",
 			event.IP,
 			event.UserAgent,
@@ -1547,10 +1561,11 @@ func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string)
 		return err
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,referer,accept_language,forwarded_for,is_prefetch,raw_payload,triggered_at) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO tracking_mark_events(mark_id,token,kind,event_index,source,ip,user_agent,referer,accept_language,forwarded_for,is_prefetch,raw_payload,triggered_at) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?,?,?)`,
 		markID,
 		event.Token,
 		kind,
+		event.EventIndex,
 		"cloud",
 		event.IP,
 		event.UserAgent,
@@ -1647,6 +1662,10 @@ func queryInt(c *gin.Context, key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func trackingEventIndexFromQuery(c *gin.Context) string {
+	return firstNonEmpty(c.Query("i"), c.Query("idx"), c.Query("index"), c.Query("event_index"), c.Query("l"), c.Query("link"), c.Query("asset"))
 }
 
 func (s *Server) qrcodeTargetURL(token string) string {

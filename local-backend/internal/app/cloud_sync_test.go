@@ -56,8 +56,8 @@ func TestSyncCloudTrackingEventsImportsRemoteEventsByToken(t *testing.T) {
 	}
 
 	events := []cloudTrackingEventInput{
-		{ID: 1, Token: "tracking-1", Kind: "open", TriggeredAt: "2026-06-09 10:00:00", IP: "203.0.113.1"},
-		{ID: 2, Token: "mark-1", Kind: "qrcode", TriggeredAt: "2026-06-09 10:01:00", IP: "203.0.113.2"},
+		{ID: 1, Token: "tracking-1", Kind: "open", EventIndex: "variant:1:open", TriggeredAt: "2026-06-09 10:00:00", IP: "203.0.113.1"},
+		{ID: 2, Token: "mark-1", Kind: "qrcode", EventIndex: "variant:1:image:qr.png", TriggeredAt: "2026-06-09 10:01:00", IP: "203.0.113.2"},
 		{ID: 3, Token: "unknown", Kind: "open", TriggeredAt: "2026-06-09 10:02:00", IP: "203.0.113.3"},
 	}
 	previousClient := cloudHTTPClient
@@ -102,6 +102,16 @@ func TestSyncCloudTrackingEventsImportsRemoteEventsByToken(t *testing.T) {
 	}
 	if openCount != 1 || markEventCount != 1 {
 		t.Fatalf("expected imported open and qrcode events, got open_count=%d mark_events=%d", openCount, markEventCount)
+	}
+	var openIndex, markIndex string
+	if err := conn.QueryRow(`SELECT event_index FROM open_events WHERE tracking_id='tracking-1'`).Scan(&openIndex); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(`SELECT event_index FROM tracking_mark_events WHERE token='mark-1'`).Scan(&markIndex); err != nil {
+		t.Fatal(err)
+	}
+	if openIndex != "variant:1:open" || markIndex != "variant:1:image:qr.png" {
+		t.Fatalf("unexpected event indexes: open=%q mark=%q", openIndex, markIndex)
 	}
 
 	result, err = server.syncCloudTrackingEvents(t.Context(), "https://tracking.test", "creator-token")

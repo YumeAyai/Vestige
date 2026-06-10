@@ -23,12 +23,32 @@
 
 | 环境变量 | 说明 |
 | :--- | :--- |
-| `MONGODB_URI` | 腾讯云文档数据库 MongoDB 连接串 |
-| `MONGODB_DATABASE` | 数据库名，默认 `nousmail_tracking` |
-| `MONGODB_EVENTS_COLLECTION` | 事件集合名，默认 `tracking_events` |
-| `MONGODB_ASSETS_COLLECTION` | 图片资产集合名，默认 `tracking_assets` |
+| `TCB_ENV_ID` | 云开发环境 ID，例如 `xray-7g6vc4y2d2fc01be` |
+| `TCB_REGION` | 腾讯云地域，例如 `ap-shanghai` |
+| `TCB_EVENTS_COLLECTION` | 事件集合名，默认 `tracking_events` |
+| `TCB_ASSETS_COLLECTION` | 图片资产集合名，默认 `tracking_assets` |
+| `TENCENTCLOUD_SECRET_ID` | 调用 TCB OpenAPI 的 SecretId |
+| `TENCENTCLOUD_SECRET_KEY` | 调用 TCB OpenAPI 的 SecretKey |
 
-这些值也可以写入 `config.yaml` 的 `scf.mongodb`，SCF 环境变量优先级更高。
+SCF 运行时使用腾讯云 Go SDK 的 `RunCommands` 调用 CloudBase 文档型数据库，不需要 `MONGODB_URI`。这些值也可以写入 `config.yaml` 的 `scf.tcb`，SCF 环境变量优先级更高。
+
+## CloudBase CLI 部署
+
+项目根目录已经提供 `cloudbaserc.json`，函数名是 `jianji`，运行时是 `Go1`，Handler 是 `main`，上传目录是 `functions/jianji`。
+
+首次部署前先构建 Linux 可执行文件：
+
+```sh
+sh scripts/build-tcb-function.sh
+```
+
+然后部署 HTTP 云函数并绑定访问路径：
+
+```sh
+tcb fn deploy -e xray-7g6vc4y2d2fc01be jianji --httpFn --path /jianji --runtime Go1 --force
+```
+
+`cloudbaserc.json` 会写入 `TCB_ENV_ID`、地域和集合名。`TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY` 属于敏感值，不写入仓库，请在腾讯云函数控制台配置，或给函数绑定具备 TCB 文档型数据库 `RunCommands` 权限的运行角色。
 
 ## 部署流程
 
@@ -40,6 +60,6 @@
 
 ## 注意
 
-- 当前 CD 云函数入口位于 `tracking-server/cmd/scf`，用腾讯云 SCF Go event handler 接 API 网关事件。
-- 文档数据库连接串不要写进代码，放在 SCF 环境变量中。
+- 当前 CD 云函数入口位于 `tracking-server/cmd/scf`，用腾讯云 SCF Go event handler 接 API 网关事件；通过 CloudBase CLI 部署时要使用 HTTP 函数参数 `--httpFn --path /jianji`，否则默认 Event 函数没有公网 HTTP 访问路径。
+- 文档型数据库访问走腾讯云 TCB OpenAPI 的 `RunCommands`，不要再配置 `MONGODB_URI`。
 - 生产部署建议给部署用 CAM 子账号只授予 SCF 更新函数代码的最小权限。

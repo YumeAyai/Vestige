@@ -15,6 +15,11 @@ frontend:
   api_proxy: "http://localhost:8080"
 
 scf:
+  tcb:
+    env_id: "xray-7g6vc4y2d2fc01be"
+    region: "ap-shanghai"
+    events_collection: "tracking_events"
+    assets_collection: "tracking_assets"
   mongodb:
     uri: ""
     database: "nousmail_tracking"

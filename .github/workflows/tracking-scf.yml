@@ -15,6 +15,7 @@ permissions:
 env:
   SCF_PACKAGE: tracking-scf.zip
   SCF_BINARY: main
+  SCF_FUNCTION_DIR: functions/jianji
 
 jobs:
   package:
@@ -37,10 +38,11 @@ jobs:
         run: go test ./...
 
       - name: Build Linux function binary
-        run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$SCF_BINARY" ./tracking-server/cmd/scf
+        run: sh scripts/build-tcb-function.sh
 
       - name: Create deploy package
-        run: zip -9 "$SCF_PACKAGE" "$SCF_BINARY"
+        working-directory: ${{ env.SCF_FUNCTION_DIR }}
+        run: zip -9 "../../$SCF_PACKAGE" "$SCF_BINARY"
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4

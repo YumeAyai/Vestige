@@ -33,6 +33,7 @@ type eventDoc struct {
 	Source         string    `bson:"source"`
 	Campaign       string    `bson:"campaign"`
 	Link           string    `bson:"link"`
+	EventIndex     string    `bson:"event_index"`
 	Token          string    `bson:"token"`
 	Kind           string    `bson:"kind"`
 	IP             string    `bson:"ip"`
@@ -91,6 +92,7 @@ func (s *MongoStore) EnsureIndexes(ctx context.Context) error {
 		{Keys: bson.D{{Key: "id", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "source", Value: 1}, {Key: "id", Value: 1}}},
 		{Keys: bson.D{{Key: "source", Value: 1}, {Key: "campaign", Value: 1}, {Key: "kind", Value: 1}, {Key: "triggered_at", Value: 1}}},
+		{Keys: bson.D{{Key: "source", Value: 1}, {Key: "campaign", Value: 1}, {Key: "event_index", Value: 1}, {Key: "triggered_at", Value: 1}}},
 		{Keys: bson.D{{Key: "token", Value: 1}, {Key: "kind", Value: 1}, {Key: "triggered_at", Value: 1}}},
 	})
 	if err != nil {
@@ -120,6 +122,7 @@ func (s *MongoStore) RecordEvent(ctx context.Context, event trackingcloud.Event)
 		Source:         event.Source,
 		Campaign:       event.Campaign,
 		Link:           event.Link,
+		EventIndex:     event.EventIndex,
 		Token:          event.Token,
 		Kind:           event.Kind,
 		IP:             event.IP,
@@ -300,6 +303,7 @@ func eventFromDoc(doc eventDoc) trackingcloud.Event {
 		Source:         doc.Source,
 		Campaign:       doc.Campaign,
 		Link:           doc.Link,
+		EventIndex:     doc.EventIndex,
 		Token:          doc.Token,
 		Kind:           doc.Kind,
 		TriggeredAt:    doc.TriggeredAt.UTC().Format(time.RFC3339),

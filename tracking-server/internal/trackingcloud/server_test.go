@@ -29,7 +29,7 @@ func newTestRouter(t *testing.T) (*gin.Engine, *sql.DB) {
 func TestPixelRecordsOpenEventAndReturnsGIF(t *testing.T) {
 	router, conn := newTestRouter(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/p?s=tenant&c=campaign&rid=token", nil)
+	req := httptest.NewRequest(http.MethodGet, "/p?s=tenant&c=campaign&rid=token&i=variant%3A1%3Aopen", nil)
 	req.Header.Set("User-Agent", "Mozilla/5.0")
 	req.Header.Set("X-Forwarded-For", "203.0.113.9, 10.0.0.1")
 	rec := httptest.NewRecorder()
@@ -42,8 +42,8 @@ func TestPixelRecordsOpenEventAndReturnsGIF(t *testing.T) {
 		t.Fatalf("content type = %q", got)
 	}
 
-	var kind, source, campaign, token, forwardedFor string
-	if err := conn.QueryRow(`SELECT kind,source,campaign,token,forwarded_for FROM tracking_events`).Scan(&kind, &source, &campaign, &token, &forwardedFor); err != nil {
+	var kind, source, campaign, token, eventIndex, forwardedFor string
+	if err := conn.QueryRow(`SELECT kind,source,campaign,token,event_index,forwarded_for FROM tracking_events`).Scan(&kind, &source, &campaign, &token, &eventIndex, &forwardedFor); err != nil {
 		t.Fatal(err)
 	}
 	if kind != "open" || source != "tenant" || campaign != "campaign" || token != "token" {
@@ -51,6 +51,9 @@ func TestPixelRecordsOpenEventAndReturnsGIF(t *testing.T) {
 	}
 	if forwardedFor != "203.0.113.9, 10.0.0.1" {
 		t.Fatalf("unexpected forwarded_for: %q", forwardedFor)
+	}
+	if eventIndex != "variant:1:open" {
+		t.Fatalf("unexpected event_index: %q", eventIndex)
 	}
 }
 
@@ -85,12 +88,15 @@ func TestRedirectRecordsClickAndRedirects(t *testing.T) {
 		t.Fatalf("location = %q", got)
 	}
 
-	var kind, campaign, link string
-	if err := conn.QueryRow(`SELECT kind,campaign,link FROM tracking_events`).Scan(&kind, &campaign, &link); err != nil {
+	var kind, campaign, link, eventIndex string
+	if err := conn.QueryRow(`SELECT kind,campaign,link,event_index FROM tracking_events`).Scan(&kind, &campaign, &link, &eventIndex); err != nil {
 		t.Fatal(err)
 	}
 	if kind != "click" || campaign != "42" || link != "hero" {
 		t.Fatalf("unexpected event: kind=%s campaign=%s link=%s", kind, campaign, link)
+	}
+	if eventIndex != "hero" {
+		t.Fatalf("unexpected event_index: %s", eventIndex)
 	}
 }
 

@@ -6,3 +6,7 @@ data/
 *.db-shm
 *.db-wal
 nous-mail
+/main
+/tracker
+/*.zip
+/tracking-server/scf_bootstrap
