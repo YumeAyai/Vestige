@@ -2,6 +2,8 @@ name: Release
 
 on:
   push:
+    branches:
+      - dev
     tags:
       - "v*"
   workflow_dispatch:
@@ -18,6 +20,9 @@ on:
 
 permissions:
   contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build-release:
@@ -51,12 +56,24 @@ jobs:
           set -euo pipefail
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             version="${GITHUB_REF_NAME}"
+            prerelease="false"
+            make_latest="true"
+          elif [ "${GITHUB_REF_NAME}" = "dev" ]; then
+            version="dev-latest"
+            prerelease="true"
+            make_latest="false"
           elif [ -n "${{ inputs.version }}" ]; then
             version="${{ inputs.version }}"
+            prerelease="${{ inputs.prerelease }}"
+            make_latest="false"
           else
             version="dev-$(date -u +%Y%m%d-%H%M%S)"
+            prerelease="true"
+            make_latest="false"
           fi
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          echo "make_latest=${make_latest}" >> "$GITHUB_OUTPUT"
 
       - name: Run Go tests
         run: go test ./pkg/... ./backend/... ./tracker/...
@@ -85,8 +102,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.meta.outputs.version }}
+          target_commitish: ${{ github.sha }}
           name: Vestige ${{ steps.meta.outputs.version }}
-          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+          prerelease: ${{ steps.meta.outputs.prerelease }}
+          make_latest: ${{ steps.meta.outputs.make_latest }}
           files: |
             dist/vestige-app-${{ steps.meta.outputs.version }}.zip
             dist/tracker-${{ steps.meta.outputs.version }}.zip
