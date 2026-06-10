@@ -1,10 +1,13 @@
 package app
 
 import (
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"Vestige/pkg/config"
+
+	"github.com/gin-gonic/gin"
 )
 
 func TestReadContactsCSVWithoutHeaderUsesFallbackColumns(t *testing.T) {
@@ -48,6 +51,21 @@ func TestQRCodeTargetURLUsesEnvAndChoosesSeparator(t *testing.T) {
 	got := server.qrcodeTargetURL("token-1")
 	if got != "https://example.com/survey?src=email&t=token-1" {
 		t.Fatalf("unexpected target URL: %s", got)
+	}
+}
+
+func TestTrackingBaseURLIgnoresAppBaseURLHeader(t *testing.T) {
+	cfg := config.Default()
+	cfg.LocalBackend.TrackingBaseURL = "https://track.example.com/jianji"
+	server := &Server{cfg: cfg}
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	ctx.Request = httptest.NewRequest("POST", "/api/campaigns/1/send", nil)
+	ctx.Request.Header.Set("X-Base-URL", "http://localhost:8080")
+
+	got := server.trackingBaseURL(ctx)
+	if got != "https://track.example.com/jianji" {
+		t.Fatalf("tracking base URL used app base URL header: %s", got)
 	}
 }
 

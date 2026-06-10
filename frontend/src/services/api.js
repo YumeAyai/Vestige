@@ -45,7 +45,7 @@ export const api = {
   campaign: (id) => request(`/api/campaigns/${id}`),
   campaignStats: (id) => request(`/api/campaigns/${id}/stats`),
   recipients: (id) => request(`/api/campaigns/${id}/recipients`),
-  sendCampaign: (id) => request(`/api/campaigns/${id}/send`, { method: 'POST', headers: { 'X-Base-URL': location.origin } }),
+  sendCampaign: (id) => request(`/api/campaigns/${id}/send`, { method: 'POST' }),
   // AB Testing
   createVariant: (campaignId, data) => request(`/api/campaigns/${campaignId}/variants`, { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
   updateVariant: (campaignId, variantId, data) => request(`/api/campaigns/${campaignId}/variants/${variantId}`, { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(data) }),

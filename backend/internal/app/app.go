@@ -1607,9 +1607,6 @@ func (s *Server) trackingBaseURL(c *gin.Context) string {
 	if value := strings.TrimSpace(c.GetHeader("X-Tracking-Base-URL")); value != "" {
 		return value
 	}
-	if value := strings.TrimSpace(c.GetHeader("X-Base-URL")); value != "" {
-		return value
-	}
 	if value := strings.TrimSpace(s.cfg.LocalBackend.TrackingBaseURL); value != "" {
 		return value
 	}
