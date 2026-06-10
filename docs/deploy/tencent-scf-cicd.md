@@ -32,23 +32,22 @@
 
 SCF 运行时使用腾讯云 Go SDK 的 `RunCommands` 调用 CloudBase 文档型数据库，不需要 `MONGODB_URI`。这些值也可以写入 `config.yaml` 的 `scf.tcb`，SCF 环境变量优先级更高。
 
-## CloudBase CLI 部署
+## 云函数部署包
 
-项目根目录已经提供 `cloudbaserc.json`，函数名是 `jianji`，运行时是 `Go1`，Handler 是 `main`，上传目录是 `functions/jianji`。
-
-首次部署前先构建 Linux 可执行文件：
+构建 Linux amd64 云函数可执行文件和部署包：
 
 ```sh
-sh scripts/build-tcb-function.sh
+sh scripts/build-tracker-function.sh
 ```
 
-然后部署 HTTP 云函数并绑定访问路径：
+构建产物：
 
-```sh
-tcb fn deploy -e xray-7g6vc4y2d2fc01be jianji --httpFn --path /jianji --runtime Go1 --force
-```
+- `dist/main`：云函数 Linux amd64 可执行文件。
+- `dist/tracker.zip`：部署包，包含 `main` 和 `scf_bootstrap`。
 
-`cloudbaserc.json` 会写入 `TCB_ENV_ID`、地域和集合名。`TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY` 属于敏感值，不写入仓库，请在腾讯云函数控制台配置，或给函数绑定具备 TCB 文档型数据库 `RunCommands` 权限的运行角色。
+函数名建议使用 `jianji`，HTTP 路径绑定 `/jianji`，运行时使用 Go 自定义启动或兼容 `scf_bootstrap` 的运行方式。`TCB_ENV_ID`、地域和集合名可以写入 `config.yaml` 的 `scf.tcb` 或函数环境变量。`TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY` 属于敏感值，不写入仓库，请在腾讯云函数控制台配置，或给函数绑定具备 TCB 文档型数据库 `RunCommands` 权限的运行角色。
+
+HTTP 函数启动时会先启动 Gin 监听 `PORT`，TCB 数据库连接会在首次写入/查询事件时延迟初始化。因此 `/health` 可以用于确认函数进程和 HTTP 入口是否已经正常启动；如果 `/health` 正常但 `/p` 或 `/api/events` 报错，优先检查 `TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY` 和 TCB OpenAPI 权限。
 
 ## 部署流程
 
@@ -60,6 +59,6 @@ tcb fn deploy -e xray-7g6vc4y2d2fc01be jianji --httpFn --path /jianji --runtime 
 
 ## 注意
 
-- 当前 CD 云函数入口位于 `tracking-server/cmd/scf`，用腾讯云 SCF Go event handler 接 API 网关事件；通过 CloudBase CLI 部署时要使用 HTTP 函数参数 `--httpFn --path /jianji`，否则默认 Event 函数没有公网 HTTP 访问路径。
+- 当前云函数入口位于 `tracker/cmd/scf`，用腾讯云 SCF Go event handler 接 API 网关事件；部署时需要把 HTTP 路径绑定到 `/jianji`，否则默认 Event 函数没有公网 HTTP 访问路径。
 - 文档型数据库访问走腾讯云 TCB OpenAPI 的 `RunCommands`，不要再配置 `MONGODB_URI`。
 - 生产部署建议给部署用 CAM 子账号只授予 SCF 更新函数代码的最小权限。
