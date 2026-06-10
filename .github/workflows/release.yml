@@ -1,0 +1,92 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release tag/version, for example v0.1.0
+        required: false
+        type: string
+      prerelease:
+        description: Mark the GitHub Release as prerelease
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build release artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Resolve release version
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="dev-$(date -u +%Y%m%d-%H%M%S)"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Run Go tests
+        run: go test ./pkg/... ./backend/... ./tracker/...
+
+      - name: Build app distribution
+        env:
+          VESTIGE_VERSION: ${{ steps.meta.outputs.version }}
+        run: sh scripts/build-app.sh
+
+      - name: Package app distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          zip -9 -r "vestige-app-${{ steps.meta.outputs.version }}.zip" app
+
+      - name: Build tracker function package
+        env:
+          TRACKER_VERSION: ${{ steps.meta.outputs.version }}
+        run: sh scripts/build-tracker-function.sh
+
+      - name: Version tracker package
+        run: cp dist/tracker.zip "dist/tracker-${{ steps.meta.outputs.version }}.zip"
+
+      - name: Upload release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.version }}
+          name: Vestige ${{ steps.meta.outputs.version }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && inputs.prerelease || false }}
+          files: |
+            dist/vestige-app-${{ steps.meta.outputs.version }}.zip
+            dist/tracker-${{ steps.meta.outputs.version }}.zip
