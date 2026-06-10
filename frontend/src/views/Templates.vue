@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { api } from '../services/api'
+import { formatDateTime } from '../utils/time'
 
 const items = ref([])
 const preview = ref({ subject: '', body_html: '' })
@@ -106,11 +107,6 @@ async function renameTemplate(item) {
     form.name = name.trim()
   }
   await load()
-}
-
-function formatTime(value) {
-  if (!value) return '-'
-  return value.replace('T', ' ').replace('Z', '').slice(0, 19)
 }
 
 async function renderPreview() {
@@ -313,8 +309,8 @@ onMounted(renderPreview)
             <tr v-for="item in items" :key="item.id" :class="{ 'active-row': item.id === activeTemplateId }">
               <td>{{ item.name }}</td>
               <td>{{ item.subject }}</td>
-              <td>{{ formatTime(item.created_at) }}</td>
-              <td>{{ formatTime(item.updated_at) }}</td>
+              <td>{{ formatDateTime(item.created_at) }}</td>
+              <td>{{ formatDateTime(item.updated_at) }}</td>
               <td>
                 <div class="table-actions">
                   <button type="button" class="secondary" @click="openTemplate(item)">打开</button>

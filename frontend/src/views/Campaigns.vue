@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../services/api'
+import { formatDateTime } from '../utils/time'
 
 const router = useRouter()
 const route = useRoute()
@@ -242,7 +243,7 @@ watch(
               <td>
                 <span class="status" :class="item.status">{{ item.status }}</span>
               </td>
-              <td>{{ item.created_at }}</td>
+              <td>{{ formatDateTime(item.created_at) }}</td>
             </tr>
           </tbody>
         </table>

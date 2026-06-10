@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../services/api'
+import { formatDateTime } from '../utils/time'
 
 const campaigns = ref([])
 const contacts = ref([])
@@ -46,7 +47,7 @@ const completed = computed(() => campaigns.value.filter((item) => item.status ==
             <td><RouterLink :to="`/campaigns/${item.id}`">{{ item.name }}</RouterLink></td>
             <td>{{ item.subject }}</td>
             <td><span class="status" :class="item.status">{{ item.status }}</span></td>
-            <td>{{ item.created_at }}</td>
+            <td>{{ formatDateTime(item.created_at) }}</td>
           </tr>
         </tbody>
       </table>

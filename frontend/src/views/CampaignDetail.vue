@@ -3,6 +3,7 @@ import * as echarts from 'echarts'
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../services/api'
+import { formatDateTime } from '../utils/time'
 
 const route = useRoute()
 const campaign = ref(null)
@@ -153,19 +154,6 @@ function percent(count, total) {
 
 function formatPercent(value) {
   return `${Number(value || 0).toFixed(1)}%`
-}
-
-function pad(value) {
-  return String(value).padStart(2, '0')
-}
-
-function formatDateTime(value) {
-  if (!value) return '-'
-  const text = String(value).trim()
-  const normalized = text.includes('T') ? text : text.replace(' ', 'T')
-  const date = new Date(normalized)
-  if (Number.isNaN(date.getTime())) return text
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
 async function load() {
