@@ -190,6 +190,13 @@ func TestImageAssetRecordsImageAfterLoad(t *testing.T) {
 	if len(mem.events) != 1 || mem.events[0].Kind != "image" || mem.events[0].Token != "mark-1" {
 		t.Fatalf("unexpected image event: %#v", mem.events)
 	}
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"isBase64Encoded":true`) || !strings.Contains(string(raw), `"content-type":"image/png"`) {
+		t.Fatalf("response must match API Gateway proxy shape: %s", raw)
+	}
 }
 
 func TestUploadAssetReturnsImgURL(t *testing.T) {

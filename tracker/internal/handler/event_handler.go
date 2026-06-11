@@ -527,7 +527,7 @@ func jsonResponse(statusCode int, data any) model.SCFResponse {
 	body, _ := json.Marshal(data)
 	return model.SCFResponse{
 		StatusCode: statusCode,
-		Headers:    map[string]string{"Content-Type": "application/json"},
+		Headers:    responseHeaders("application/json"),
 		Body:       string(body),
 	}
 }
@@ -535,9 +535,17 @@ func jsonResponse(statusCode int, data any) model.SCFResponse {
 func imageResponse(contentType string, data []byte) model.SCFResponse {
 	return model.SCFResponse{
 		StatusCode:      200,
-		Headers:         map[string]string{"Content-Type": contentType, "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+		Headers:         responseHeaders(contentType),
 		Body:            base64.StdEncoding.EncodeToString(data),
 		IsBase64Encoded: true,
+	}
+}
+
+func responseHeaders(contentType string) map[string]string {
+	return map[string]string{
+		"Content-Type":  contentType,
+		"content-type":  contentType,
+		"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
 	}
 }
 

@@ -89,7 +89,7 @@ func initErrorResponse(err error) model.SCFResponse {
 	})
 	return model.SCFResponse{
 		StatusCode: 500,
-		Headers:    map[string]string{"Content-Type": "application/json"},
+		Headers:    map[string]string{"Content-Type": "application/json", "content-type": "application/json"},
 		Body:       string(body),
 	}
 }

@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"github.com/tencentyun/scf-go-lib/events"
+)
 
 type Event struct {
 	ID             int64  `json:"id"`
@@ -61,9 +65,4 @@ type SCFRequestContext struct {
 	SourceIP   string `json:"sourceIp"`
 }
 
-type SCFResponse struct {
-	StatusCode      int               `json:"statusCode"`
-	Headers         map[string]string `json:"headers"`
-	Body            string            `json:"body"`
-	IsBase64Encoded bool              `json:"isBase64Encoded"`
-}
+type SCFResponse = events.APIGatewayResponse
