@@ -89,7 +89,7 @@ func TestTCBStoreListEventsParsesExtendedJSONID(t *testing.T) {
 }
 
 func TestTCBStoreRecordEventUsesNativeCommands(t *testing.T) {
-	client := &fakeRunCommandsClient{results: []string{`{"ok":1}`}}
+	client := &fakeRunCommandsClient{results: []string{`{"ok":1}`, `{"ok":1}`}}
 	store := NewTCBStoreWithClient(client, TCBConfig{EnvID: "env-1", EventsCollection: "tracking_events"})
 
 	id, err := store.RecordEvent(context.Background(), model.Event{
@@ -105,8 +105,8 @@ func TestTCBStoreRecordEventUsesNativeCommands(t *testing.T) {
 	if id != time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC).UnixNano() {
 		t.Fatalf("unexpected id: %d", id)
 	}
-	if len(client.requests) != 1 {
-		t.Fatalf("expected only insert command, got %d", len(client.requests))
+	if len(client.requests) != 2 {
+		t.Fatalf("expected insert and counter commands, got %d", len(client.requests))
 	}
 	for _, req := range client.requests {
 		if got := *req.MgoCommands[0].CommandType; got != "COMMAND" {
@@ -117,10 +117,17 @@ func TestTCBStoreRecordEventUsesNativeCommands(t *testing.T) {
 	if !strings.HasPrefix(insert, `{"insert":"tracking_events"`) {
 		t.Fatalf("insert must be the first command field, got %s", insert)
 	}
+	counter := client.requests[1].MgoCommands[0]
+	if *counter.TableName != "tracking_counters" {
+		t.Fatalf("unexpected counter table: %s", *counter.TableName)
+	}
+	if !strings.HasPrefix(*counter.Command, `{"update":"tracking_counters"`) {
+		t.Fatalf("counter update must be the first command field, got %s", *counter.Command)
+	}
 }
 
 func TestTCBStoreRecordEventPreservesNanosecondID(t *testing.T) {
-	client := &fakeRunCommandsClient{results: []string{`{"ok":1}`}}
+	client := &fakeRunCommandsClient{results: []string{`{"ok":1}`, `{"ok":1}`}}
 	store := NewTCBStoreWithClient(client, TCBConfig{EnvID: "env-1", EventsCollection: "tracking_events"})
 	eventTime := time.Date(2026, 6, 10, 12, 0, 0, 123456789, time.UTC)
 
@@ -130,6 +137,102 @@ func TestTCBStoreRecordEventPreservesNanosecondID(t *testing.T) {
 	}
 	if id != eventTime.UnixNano() {
 		t.Fatalf("unexpected id: got %d want %d", id, eventTime.UnixNano())
+	}
+}
+
+func TestTCBStoreRecordEventUpdatesCounters(t *testing.T) {
+	client := &fakeRunCommandsClient{results: []string{`{"ok":1}`, `{"ok":1}`}}
+	store := NewTCBStoreWithClient(client, TCBConfig{EnvID: "env-1", EventsCollection: "tracking_events", CountersCollection: "custom_counters"})
+
+	_, err := store.RecordEvent(context.Background(), model.Event{
+		Source:      "creator",
+		Campaign:    "camp-1",
+		Token:       "token-1",
+		Kind:        "click",
+		TriggeredAt: "2026-06-10T12:34:56Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("expected insert and counter commands, got %d", len(client.requests))
+	}
+	command := client.requests[1].MgoCommands[0]
+	if *command.TableName != "custom_counters" {
+		t.Fatalf("unexpected counter table: %s", *command.TableName)
+	}
+	var body updateCommandBody
+	if err := json.Unmarshal([]byte(*command.Command), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Update != "custom_counters" || len(body.Updates) != 2 {
+		t.Fatalf("unexpected counter update body: %#v", body)
+	}
+	hourUpdate := body.Updates[0]
+	if !hourUpdate.Upsert || hourUpdate.Query["_id"] == "" {
+		t.Fatalf("hour counter must be upserted with stable id: %#v", hourUpdate)
+	}
+	setOnInsert := hourUpdate.Update["$setOnInsert"].(map[string]any)
+	if setOnInsert["type"] != "hour" || setOnInsert["hour"] != "2026-06-10 12:00" || setOnInsert["kind"] != "click" {
+		t.Fatalf("unexpected hour counter dimensions: %#v", setOnInsert)
+	}
+	inc := hourUpdate.Update["$inc"].(map[string]any)
+	if intValue(inc["count"]) != 1 {
+		t.Fatalf("hour counter should increment count by 1: %#v", inc)
+	}
+	tokenUpdate := body.Updates[1]
+	tokenInsert := tokenUpdate.Update["$setOnInsert"].(map[string]any)
+	if tokenInsert["type"] != "token_hour" || tokenInsert["token"] != "token-1" || tokenInsert["hour"] != "2026-06-10 12:00" {
+		t.Fatalf("unexpected token counter dimensions: %#v", tokenInsert)
+	}
+}
+
+func TestTCBStoreStatsUsesCounters(t *testing.T) {
+	client := &fakeRunCommandsClient{results: []string{
+		`{"cursor":{"firstBatch":[{"type":"hour","source":"creator","campaign":"camp-1","kind":"click","hour":"2026-06-10 12:00","count":{"$numberInt":"3"}},{"type":"hour","source":"creator","campaign":"camp-1","kind":"open","hour":"2026-06-10 12:00","count":2}]}}`,
+		`{"cursor":{"firstBatch":[{"type":"token_hour","source":"creator","campaign":"camp-1","kind":"click","token":"a","hour":"2026-06-10 12:00"},{"type":"token_hour","source":"creator","campaign":"camp-1","kind":"click","token":"b","hour":"2026-06-10 12:00"},{"type":"token_hour","source":"creator","campaign":"camp-1","kind":"open","token":"a","hour":"2026-06-10 12:00"}]}}`,
+	}}
+	store := NewTCBStoreWithClient(client, TCBConfig{EnvID: "env-1", EventsCollection: "tracking_events", CountersCollection: "tracking_counters"})
+
+	stats, err := store.Stats(context.Background(), model.EventFilter{
+		Source:   "creator",
+		Campaign: "camp-1",
+		Since:    "2026-06-10T00:05:00Z",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("stats should query counters only, got %d requests", len(client.requests))
+	}
+	for _, req := range client.requests {
+		if table := *req.MgoCommands[0].TableName; table != "tracking_counters" {
+			t.Fatalf("stats should not scan raw events, got table %s", table)
+		}
+	}
+	if len(stats.Summary) != 2 {
+		t.Fatalf("unexpected summary: %#v", stats.Summary)
+	}
+	if stats.Summary[0]["kind"] != "click" || stats.Summary[0]["count"] != 3 || stats.Summary[0]["unique_tokens"] != 2 {
+		t.Fatalf("unexpected click summary: %#v", stats.Summary[0])
+	}
+	if stats.Summary[1]["kind"] != "open" || stats.Summary[1]["count"] != 2 || stats.Summary[1]["unique_tokens"] != 1 {
+		t.Fatalf("unexpected open summary: %#v", stats.Summary[1])
+	}
+	if len(stats.Trend) != 2 {
+		t.Fatalf("unexpected trend: %#v", stats.Trend)
+	}
+
+	var firstFind findCommandBody
+	if err := json.Unmarshal([]byte(*client.requests[0].MgoCommands[0].Command), &firstFind); err != nil {
+		t.Fatal(err)
+	}
+	if firstFind.Find != "tracking_counters" || firstFind.Filter["type"] != "hour" {
+		t.Fatalf("unexpected hour find: %#v", firstFind)
+	}
+	hourFilter := firstFind.Filter["hour"].(map[string]any)
+	if hourFilter["$gte"] != "2026-06-10 00:00" {
+		t.Fatalf("unexpected since hour filter: %#v", hourFilter)
 	}
 }
 

@@ -11,3 +11,4 @@ scf:
     region: "ap-shanghai"
     events_collection: "tracking_events"
     assets_collection: "tracking_assets"
+    counters_collection: "tracking_counters"

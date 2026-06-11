@@ -28,10 +28,11 @@ type SCFConfig struct {
 }
 
 type TCBConfig struct {
-	EnvID            string `yaml:"env_id"`
-	Region           string `yaml:"region"`
-	EventsCollection string `yaml:"events_collection"`
-	AssetsCollection string `yaml:"assets_collection"`
+	EnvID              string `yaml:"env_id"`
+	Region             string `yaml:"region"`
+	EventsCollection   string `yaml:"events_collection"`
+	AssetsCollection   string `yaml:"assets_collection"`
+	CountersCollection string `yaml:"counters_collection"`
 }
 
 func Default() Config {
@@ -44,10 +45,11 @@ func Default() Config {
 		},
 		SCF: SCFConfig{
 			TCB: TCBConfig{
-				EnvID:            "xray-7g6vc4y2d2fc01be",
-				Region:           "ap-shanghai",
-				EventsCollection: "tracking_events",
-				AssetsCollection: "tracking_assets",
+				EnvID:              "xray-7g6vc4y2d2fc01be",
+				Region:             "ap-shanghai",
+				EventsCollection:   "tracking_events",
+				AssetsCollection:   "tracking_assets",
+				CountersCollection: "tracking_counters",
 			},
 		},
 	}
@@ -95,6 +97,7 @@ func applyEnv(cfg *Config) {
 	setString(&cfg.SCF.TCB.Region, "TCB_REGION")
 	setString(&cfg.SCF.TCB.EventsCollection, "TCB_EVENTS_COLLECTION")
 	setString(&cfg.SCF.TCB.AssetsCollection, "TCB_ASSETS_COLLECTION")
+	setString(&cfg.SCF.TCB.CountersCollection, "TCB_COUNTERS_COLLECTION")
 }
 
 func setString(target *string, key string) {

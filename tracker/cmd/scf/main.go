@@ -42,10 +42,11 @@ func initHandler(ctx context.Context) error {
 	}
 
 	tcbConfig := store.TCBConfig{
-		EnvID:            envIDFromConfig(cfg),
-		Region:           valueOr(cfg.SCF.TCB.Region, "ap-shanghai"),
-		EventsCollection: valueOr(cfg.SCF.TCB.EventsCollection, "tracking_events"),
-		AssetsCollection: valueOr(cfg.SCF.TCB.AssetsCollection, "tracking_assets"),
+		EnvID:              envIDFromConfig(cfg),
+		Region:             valueOr(cfg.SCF.TCB.Region, "ap-shanghai"),
+		EventsCollection:   valueOr(cfg.SCF.TCB.EventsCollection, "tracking_events"),
+		AssetsCollection:   valueOr(cfg.SCF.TCB.AssetsCollection, "tracking_assets"),
+		CountersCollection: valueOr(cfg.SCF.TCB.CountersCollection, "tracking_counters"),
 	}
 	tcbStore, err := store.NewTCBStore(ctx, tcbConfig)
 	if err != nil {

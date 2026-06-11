@@ -27,17 +27,19 @@ type runCommandsClient interface {
 }
 
 type TCBStore struct {
-	client runCommandsClient
-	envID  string
-	events string
-	assets string
+	client   runCommandsClient
+	envID    string
+	events   string
+	assets   string
+	counters string
 }
 
 type TCBConfig struct {
-	EnvID            string
-	Region           string
-	EventsCollection string
-	AssetsCollection string
+	EnvID              string
+	Region             string
+	EventsCollection   string
+	AssetsCollection   string
+	CountersCollection string
 }
 
 type tcbEventDoc struct {
@@ -67,6 +69,18 @@ type tcbAssetDoc struct {
 	CreatedAt   string `json:"created_at"`
 }
 
+type tcbCounterDoc struct {
+	ID        any    `json:"_id,omitempty"`
+	Type      string `json:"type"`
+	Source    string `json:"source"`
+	Campaign  string `json:"campaign"`
+	Kind      string `json:"kind"`
+	Hour      string `json:"hour,omitempty"`
+	Token     string `json:"token,omitempty"`
+	Count     any    `json:"count,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
+}
+
 type createIndexesCommandBody struct {
 	CreateIndexes string           `json:"createIndexes"`
 	Indexes       []map[string]any `json:"indexes"`
@@ -84,6 +98,17 @@ type findCommandBody struct {
 	Limit  int64          `json:"limit"`
 }
 
+type updateCommandBody struct {
+	Update  string              `json:"update"`
+	Updates []updateCommandItem `json:"updates"`
+}
+
+type updateCommandItem struct {
+	Query  map[string]any `json:"q"`
+	Update map[string]any `json:"u"`
+	Upsert bool           `json:"upsert,omitempty"`
+}
+
 func NewTCBStore(ctx context.Context, cfg TCBConfig) (*TCBStore, error) {
 	if strings.TrimSpace(cfg.EnvID) == "" {
 		return nil, errors.New("TCB_ENV_ID is required")
@@ -96,6 +121,9 @@ func NewTCBStore(ctx context.Context, cfg TCBConfig) (*TCBStore, error) {
 	}
 	if strings.TrimSpace(cfg.AssetsCollection) == "" {
 		cfg.AssetsCollection = "tracking_assets"
+	}
+	if strings.TrimSpace(cfg.CountersCollection) == "" {
+		cfg.CountersCollection = "tracking_counters"
 	}
 	credential, err := tcbCredentialFromEnv()
 	if err != nil {
@@ -133,10 +161,11 @@ func firstEnv(keys ...string) string {
 
 func NewTCBStoreWithClient(client runCommandsClient, cfg TCBConfig) *TCBStore {
 	return &TCBStore{
-		client: client,
-		envID:  strings.TrimSpace(cfg.EnvID),
-		events: tcbValueOr(cfg.EventsCollection, "tracking_events"),
-		assets: tcbValueOr(cfg.AssetsCollection, "tracking_assets"),
+		client:   client,
+		envID:    strings.TrimSpace(cfg.EnvID),
+		events:   tcbValueOr(cfg.EventsCollection, "tracking_events"),
+		assets:   tcbValueOr(cfg.AssetsCollection, "tracking_assets"),
+		counters: tcbValueOr(cfg.CountersCollection, "tracking_counters"),
 	}
 }
 
@@ -154,6 +183,10 @@ func (s *TCBStore) EnsureIndexes(ctx context.Context) error {
 		})},
 		{s.assets, createIndexesCommand(s.assets, []map[string]any{
 			{"key": map[string]any{"name": 1}, "name": "name_1", "unique": true},
+		})},
+		{s.counters, createIndexesCommand(s.counters, []map[string]any{
+			{"key": map[string]any{"type": 1, "source": 1, "campaign": 1, "kind": 1, "hour": 1}, "name": "type_scope_kind_hour"},
+			{"key": map[string]any{"type": 1, "source": 1, "campaign": 1, "kind": 1, "token": 1, "hour": 1}, "name": "type_scope_kind_token_hour"},
 		})},
 	}
 	for _, command := range commands {
@@ -196,6 +229,9 @@ func (s *TCBStore) RecordEvent(ctx context.Context, event model.Event) (int64, e
 	if err != nil {
 		return 0, err
 	}
+	if err := s.recordCounters(ctx, event); err != nil {
+		return 0, err
+	}
 	return id, nil
 }
 
@@ -219,9 +255,56 @@ func (s *TCBStore) ListEvents(ctx context.Context, filter model.EventFilter) ([]
 	return items, nil
 }
 
+func (s *TCBStore) recordCounters(ctx context.Context, event model.Event) error {
+	hour := parseEventTime(event.TriggeredAt).UTC().Format("2006-01-02 15:00")
+	now := time.Now().UTC().Format(time.RFC3339)
+	hourID := counterID("hour", event.Source, event.Campaign, event.Kind, hour)
+	updates := []updateCommandItem{
+		{
+			Query: map[string]any{"_id": hourID},
+			Update: map[string]any{
+				"$inc": map[string]any{"count": 1},
+				"$set": map[string]any{"updated_at": now},
+				"$setOnInsert": map[string]any{
+					"_id":      hourID,
+					"type":     "hour",
+					"source":   event.Source,
+					"campaign": event.Campaign,
+					"kind":     event.Kind,
+					"hour":     hour,
+				},
+			},
+			Upsert: true,
+		},
+	}
+	if event.Token != "" {
+		tokenID := counterID("token_hour", event.Source, event.Campaign, event.Kind, event.Token, hour)
+		updates = append(updates, updateCommandItem{
+			Query: map[string]any{"_id": tokenID},
+			Update: map[string]any{
+				"$set": map[string]any{"updated_at": now},
+				"$setOnInsert": map[string]any{
+					"_id":      tokenID,
+					"type":     "token_hour",
+					"source":   event.Source,
+					"campaign": event.Campaign,
+					"kind":     event.Kind,
+					"token":    event.Token,
+					"hour":     hour,
+				},
+			},
+			Upsert: true,
+		})
+	}
+	_, err := s.runCommand(ctx, s.counters, "COMMAND", updateCommandBody{
+		Update:  s.counters,
+		Updates: updates,
+	})
+	return err
+}
+
 func (s *TCBStore) Stats(ctx context.Context, filter model.EventFilter) (model.StatsResult, error) {
-	filter.Limit = 5000
-	items, err := s.ListEvents(ctx, filter)
+	hourDocs, err := s.find(ctx, s.counters, tcbCounterFilter(filter, "hour"), map[string]any{"hour": 1, "kind": 1}, 20000)
 	if err != nil {
 		return model.StatsResult{}, err
 	}
@@ -230,22 +313,38 @@ func (s *TCBStore) Stats(ctx context.Context, filter model.EventFilter) (model.S
 		Tokens map[string]struct{}
 	}{}
 	trend := map[string]map[string]int{}
-	for _, event := range items {
-		row := byKind[event.Kind]
+	for _, raw := range hourDocs {
+		var doc tcbCounterDoc
+		if err := unmarshalTCBDoc(raw, &doc); err != nil {
+			return model.StatsResult{}, err
+		}
+		count := intValue(doc.Count)
+		row := byKind[doc.Kind]
+		row.Count += count
+		byKind[doc.Kind] = row
+		if trend[doc.Hour] == nil {
+			trend[doc.Hour] = map[string]int{}
+		}
+		trend[doc.Hour][doc.Kind] += count
+	}
+	tokenDocs, err := s.find(ctx, s.counters, tcbCounterFilter(filter, "token_hour"), map[string]any{"kind": 1, "token": 1}, 20000)
+	if err != nil {
+		return model.StatsResult{}, err
+	}
+	for _, raw := range tokenDocs {
+		var doc tcbCounterDoc
+		if err := unmarshalTCBDoc(raw, &doc); err != nil {
+			return model.StatsResult{}, err
+		}
+		if doc.Token == "" {
+			continue
+		}
+		row := byKind[doc.Kind]
 		if row.Tokens == nil {
 			row.Tokens = map[string]struct{}{}
 		}
-		row.Count++
-		if event.Token != "" {
-			row.Tokens[event.Token] = struct{}{}
-		}
-		byKind[event.Kind] = row
-
-		hour := parseEventTime(event.TriggeredAt).UTC().Format("2006-01-02 15:00")
-		if trend[hour] == nil {
-			trend[hour] = map[string]int{}
-		}
-		trend[hour][event.Kind]++
+		row.Tokens[doc.Token] = struct{}{}
+		byKind[doc.Kind] = row
 	}
 	summary := make([]map[string]any, 0, len(byKind))
 	for kind, row := range byKind {
@@ -416,6 +515,43 @@ func tcbFilter(filter model.EventFilter) map[string]any {
 		result["id"] = map[string]any{"$gt": filter.AfterID}
 	}
 	return result
+}
+
+func tcbCounterFilter(filter model.EventFilter, counterType string) map[string]any {
+	result := map[string]any{"type": counterType}
+	if filter.Source != "" {
+		result["source"] = filter.Source
+	}
+	if filter.Campaign != "" {
+		result["campaign"] = filter.Campaign
+	}
+	if filter.Kind != "" {
+		result["kind"] = filter.Kind
+	}
+	if hour := sinceHour(filter.Since); hour != "" {
+		result["hour"] = map[string]any{"$gte": hour}
+	}
+	return result
+}
+
+func counterID(parts ...string) string {
+	encoded := make([]string, 0, len(parts))
+	for _, part := range parts {
+		encoded = append(encoded, base64.RawURLEncoding.EncodeToString([]byte(part)))
+	}
+	return strings.Join(encoded, "|")
+}
+
+func sinceHour(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return ""
+	}
+	return parsed.UTC().Format("2006-01-02 15:00")
 }
 
 func commandDocuments(results []json.RawMessage) ([]json.RawMessage, error) {
