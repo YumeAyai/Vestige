@@ -199,6 +199,23 @@ func TestImageAssetRecordsImageAfterLoad(t *testing.T) {
 	}
 }
 
+func TestImageAssetDebugReturnsLookupError(t *testing.T) {
+	resp, err := NewHandler(newMemoryStore()).Handle(context.Background(), model.SCFEvent{
+		Method:      http.MethodGet,
+		Path:        "/img",
+		QueryString: "asset=missing.png&token=preview&debug=1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusNotFound || resp.Headers["Content-Type"] != "application/json" {
+		t.Fatalf("unexpected debug response: %#v", resp)
+	}
+	if !strings.Contains(resp.Body, `"asset":"missing.png"`) || !strings.Contains(resp.Body, "not found") {
+		t.Fatalf("unexpected debug body: %s", resp.Body)
+	}
+}
+
 func TestUploadAssetReturnsImgURL(t *testing.T) {
 	mem := newMemoryStore()
 	h := NewHandler(mem)

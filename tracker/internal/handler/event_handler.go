@@ -93,10 +93,16 @@ func (h *Handler) trackingImage(ctx context.Context, event model.SCFEvent) (mode
 	if assetName := strings.TrimSpace(query.Get("asset")); assetName != "" {
 		name := filepath.Base(assetName)
 		if name != assetName {
+			if debugRequest(event) {
+				return jsonResponse(404, map[string]any{"error": "invalid asset name", "asset": assetName}), nil
+			}
 			return model.SCFResponse{StatusCode: 404}, nil
 		}
 		asset, err := h.Store.GetAsset(ctx, name)
 		if err != nil {
+			if debugRequest(event) {
+				return jsonResponse(404, map[string]any{"error": err.Error(), "asset": name}), nil
+			}
 			return model.SCFResponse{StatusCode: 404}, nil
 		}
 		contentType := firstNonEmpty(asset.ContentType, mime.TypeByExtension(filepath.Ext(asset.Name)), "application/octet-stream")
