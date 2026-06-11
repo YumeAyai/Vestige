@@ -63,7 +63,7 @@ type tcbAssetDoc struct {
 	Label       string `json:"label"`
 	ContentType string `json:"content_type"`
 	DataBase64  string `json:"data_base64"`
-	Width       int    `json:"width"`
+	Width       any    `json:"width"`
 	CreatedAt   string `json:"created_at"`
 }
 
@@ -324,7 +324,7 @@ func (s *TCBStore) GetAsset(ctx context.Context, name string) (model.Asset, erro
 		Label:       doc.Label,
 		ContentType: assetContentType(doc.ContentType, assetName, data),
 		Data:        data,
-		Width:       doc.Width,
+		Width:       intValue(doc.Width),
 		CreatedAt:   parseEventTime(doc.CreatedAt),
 	}, nil
 }
@@ -554,6 +554,14 @@ func int64Value(value any) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func intValue(value any) int {
+	parsed, ok := int64Value(value)
+	if !ok {
+		return 0
+	}
+	return int(parsed)
 }
 
 func stringValue(value any) string {
