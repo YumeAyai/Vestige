@@ -194,7 +194,7 @@ func TestImageAssetRecordsImageAfterLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), `"isBase64Encoded":true`) || !strings.Contains(string(raw), `"content-type":"image/png"`) {
+	if !strings.Contains(string(raw), `"isBase64Encoded":true`) || !strings.Contains(string(raw), `"Content-Type":"image/png"`) {
 		t.Fatalf("response must match API Gateway proxy shape: %s", raw)
 	}
 }

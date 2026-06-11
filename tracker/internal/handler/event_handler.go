@@ -544,7 +544,6 @@ func imageResponse(contentType string, data []byte) model.SCFResponse {
 func responseHeaders(contentType string) map[string]string {
 	return map[string]string{
 		"Content-Type":  contentType,
-		"content-type":  contentType,
 		"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
 	}
 }
