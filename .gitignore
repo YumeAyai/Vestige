@@ -10,3 +10,4 @@ nous-mail
 /main
 /*.zip
 /tracking-server/scf_bootstrap
+backend/cmd/desktop/build/
