@@ -4,6 +4,7 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../services/api'
 import { formatDateTime } from '../utils/time'
+import { askConfirm } from '../utils/dialog'
 
 const route = useRoute()
 const campaign = ref(null)
@@ -41,9 +42,10 @@ const overviewMetrics = computed(() => {
   const total = summary.total || 0
   const sent = summary.sent || 0
   const failed = summary.failed || 0
+  const pending = summary.pending ?? Math.max(total - sent - failed - (summary.waiting || 0), 0)
+  const waiting = summary.waiting || 0
   const opened = summary.opened || 0
   const imageLoaded = summary.qr_loaded || 0
-  const pending = Math.max(total - sent - failed, 0)
   const uniqueClicks = summary.clicked ?? linkEngagement.value.uniqueClicks ?? 0
   const totalClicks = summary.click_events ?? linkEngagement.value.totalClicks ?? 0
   return {
@@ -51,6 +53,7 @@ const overviewMetrics = computed(() => {
     sent,
     failed,
     pending,
+    waiting,
     opened,
     imageLoaded,
     totalClicks,
@@ -68,6 +71,10 @@ const visibleRecipients = computed(() => {
   if (filter.value === 'qr_loaded') return recipients.value.filter((item) => item.qr_load_count > 0)
   if (filter.value === 'qr_unloaded') return recipients.value.filter((item) => item.qr_load_count === 0)
   if (filter.value === 'unopened') return recipients.value.filter((item) => item.open_count === 0)
+  if (filter.value === 'pending')
+    return recipients.value.filter((item) => item.send_status === 'pending')
+  if (filter.value === 'waiting')
+    return recipients.value.filter((item) => item.send_status === 'waiting')
   if (filter.value === 'failed')
     return recipients.value.filter((item) => item.send_status === 'failed')
   return recipients.value
@@ -147,6 +154,15 @@ function formatPrefetch(value) {
   return value ? '疑似预加载' : '正常加载'
 }
 
+function sendStatusLabel(status) {
+  return {
+    pending: '就绪',
+    waiting: '队列中',
+    sent: '已发送',
+    failed: '发送失败',
+  }[status] || status
+}
+
 function percent(count, total) {
   if (!total) return 0
   return Number(((count / total) * 100).toFixed(1))
@@ -203,9 +219,9 @@ async function loadLinkEngagement() {
 function renderChart() {
   if (!chartEl.value) return
   const chart = echarts.init(chartEl.value)
-  const { sent, failed, pending } = overviewMetrics.value
+  const { sent, failed, pending, waiting } = overviewMetrics.value
   chart.setOption({
-    color: ['#087f8c', '#d92d20', '#98a2b3'],
+    color: ['#067647', '#d92d20', '#667085', '#2563eb'],
     tooltip: { trigger: 'item' },
     legend: { bottom: 0, textStyle: { color: '#667085' } },
     xAxis: {
@@ -225,7 +241,8 @@ function renderChart() {
         data: [
           { name: '已发送', value: sent },
           { name: '失败', value: failed },
-          { name: '待发送', value: pending },
+          { name: '就绪', value: pending },
+          { name: '队列中', value: waiting },
         ],
       },
     ],
@@ -508,7 +525,7 @@ async function saveVariant() {
 
 async function removeVariant(item) {
   const variant = item.variant || item
-  if (!window.confirm(`删除变体「${variant.name}」？`)) return
+  if (!(await askConfirm(`删除变体「${variant.name}」？`))) return
   await api.deleteVariant(route.params.id, variant.id)
   if (editingVariantId.value === variant.id) resetVariantForm()
   await load()
@@ -565,7 +582,7 @@ watch(
 
     <!-- Overview Tab -->
     <template v-if="activeTab === 'overview'">
-      <div class="grid five">
+      <div class="overview-metrics">
         <div class="card metric">
           <strong>{{ overviewMetrics.total }}</strong>
           <span>收件人</span>
@@ -573,6 +590,14 @@ watch(
         <div class="card metric">
           <strong>{{ overviewMetrics.sent }}</strong>
           <span>已发送</span>
+        </div>
+        <div class="card metric">
+          <strong>{{ overviewMetrics.pending }}</strong>
+          <span>就绪</span>
+        </div>
+        <div class="card metric">
+          <strong>{{ overviewMetrics.waiting }}</strong>
+          <span>队列中</span>
         </div>
         <div class="card metric">
           <strong>{{ formatPercent(overviewMetrics.imageLoadRate) }}</strong>
@@ -623,6 +648,8 @@ watch(
             <option value="qr_unloaded">图片未加载</option>
             <option value="opened">像素已加载</option>
             <option value="unopened">像素未加载</option>
+            <option value="pending">就绪</option>
+            <option value="waiting">队列中</option>
             <option value="failed">发送失败</option>
           </select>
         </div>
@@ -649,7 +676,7 @@ watch(
               <td class="company-cell">{{ item.name }}</td>
               <td><span class="data-chip tone-0">{{ item.email }}</span></td>
               <td>
-                <span class="status" :class="item.send_status">{{ item.send_status }}</span>
+                <span class="status" :class="item.send_status">{{ sendStatusLabel(item.send_status) }}</span>
               </td>
               <td>{{ item.qr_load_count }}</td>
               <td>{{ formatDateTime(item.first_qr_load_at) }}</td>
@@ -818,7 +845,7 @@ watch(
             <tr v-for="item in imageRecipients" :key="item.id">
               <td class="company-cell">{{ item.name }}</td>
               <td><span class="data-chip tone-0">{{ item.email }}</span></td>
-              <td><span class="status" :class="item.send_status">{{ item.send_status }}</span></td>
+              <td><span class="status" :class="item.send_status">{{ sendStatusLabel(item.send_status) }}</span></td>
               <td>{{ item.open_count }}</td>
               <td>{{ item.qr_load_count }}</td>
               <td>{{ formatDateTime(item.first_qr_load_at) }}</td>

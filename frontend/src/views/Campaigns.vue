@@ -216,12 +216,6 @@ watch(
           </div>
           <p class="muted">已选择 {{ form.contact_ids.length }} 个收件人，系统会逐个单独发送。</p>
         </div>
-        <label
-          ><span
-            ><input v-model="form.tracking_enabled" type="checkbox" style="width: auto" />
-            开启阅读状态追踪</span
-          ></label
-        >
         <button :disabled="!canCreate">创建任务</button>
       </form>
 
