@@ -21,6 +21,7 @@ type Personalization struct {
 	Campaign      models.Campaign
 	QRCode        template.HTML
 	TrackingImage func(asset string) template.HTML
+	TrackingLink  func(label, targetURL string) template.URL
 }
 
 func RenderBody(body string, data Personalization) (string, error) {
@@ -30,6 +31,12 @@ func RenderBody(body string, data Personalization) (string, error) {
 				return ""
 			}
 			return data.TrackingImage(asset)
+		},
+		"TrackingLink": func(label, targetURL string) template.URL {
+			if data.TrackingLink == nil {
+				return template.URL(targetURL)
+			}
+			return data.TrackingLink(label, targetURL)
 		},
 	}).Parse(body)
 	if err != nil {
@@ -62,11 +69,8 @@ func Send(mailbox models.Mailbox, toEmail, toName, subject, html string) error {
 	msg.SetBody("text/html", html)
 
 	dialer := gomail.NewDialer(mailbox.Host, mailbox.Port, mailbox.Username, mailbox.Password)
-	dialer.SSL = mailbox.UseTLS && mailbox.Port == 465
+	dialer.SSL = mailbox.Port == 465
 	dialer.TLSConfig = &tls.Config{ServerName: mailbox.Host, MinVersion: tls.VersionTLS12}
-	if !mailbox.UseTLS {
-		dialer.SSL = false
-	}
 	return explainSMTPError(dialer.DialAndSend(msg))
 }
 
@@ -115,6 +119,7 @@ func NormalizeMailbox(mailbox models.Mailbox) models.Mailbox {
 	mailbox.Username = strings.TrimSpace(mailbox.Username)
 	mailbox.FromEmail = strings.TrimSpace(mailbox.FromEmail)
 	mailbox.FromName = strings.TrimSpace(mailbox.FromName)
+	mailbox.UseTLS = true
 	return mailbox
 }
 
