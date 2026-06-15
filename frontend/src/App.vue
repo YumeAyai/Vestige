@@ -1,9 +1,19 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { installDialog } from './utils/dialog'
 
 const route = useRoute()
 const drawerOpen = ref(false)
+const dialogInput = ref(null)
+const dialog = reactive({
+  open: false,
+  type: 'confirm',
+  title: '',
+  message: '',
+  value: '',
+  resolve: null,
+})
 const navItems = [
   { to: '/', label: '工作台', icon: 'M4 13h6V4H4v9Zm10 7h6V4h-6v16ZM4 20h6v-5H4v5Z' },
   { to: '/campaigns', label: '邮件任务', icon: 'M4 6h16M4 12h16M4 18h10' },
@@ -26,6 +36,30 @@ watch(
     drawerOpen.value = false
   },
 )
+
+onMounted(() => {
+  installDialog((options) => new Promise((resolve) => {
+    dialog.open = true
+    dialog.type = options.type || 'confirm'
+    dialog.title = options.title || (dialog.type === 'prompt' ? '输入' : '确认')
+    dialog.message = options.message || ''
+    dialog.value = options.defaultValue || ''
+    dialog.resolve = resolve
+    if (dialog.type === 'prompt') {
+      nextTick(() => dialogInput.value?.focus())
+    }
+  }))
+})
+
+function closeDialog(confirmed) {
+  const resolve = dialog.resolve
+  const result = dialog.type === 'prompt'
+    ? (confirmed ? dialog.value : null)
+    : Boolean(confirmed)
+  dialog.open = false
+  dialog.resolve = null
+  resolve?.(result)
+}
 </script>
 
 <template>
@@ -68,5 +102,21 @@ watch(
     <main class="content">
       <RouterView />
     </main>
+    <div v-if="dialog.open" class="dialog-backdrop" @click.self="closeDialog(false)">
+      <form class="dialog-panel" @submit.prevent="closeDialog(true)">
+        <h2>{{ dialog.title }}</h2>
+        <p>{{ dialog.message }}</p>
+        <input
+          v-if="dialog.type === 'prompt'"
+          ref="dialogInput"
+          v-model="dialog.value"
+          autocomplete="off"
+        />
+        <div class="dialog-actions">
+          <button class="secondary" type="button" @click="closeDialog(false)">取消</button>
+          <button type="submit">确定</button>
+        </div>
+      </form>
+    </div>
   </div>
 </template>
