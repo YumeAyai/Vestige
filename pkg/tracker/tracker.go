@@ -6,11 +6,14 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	qrcode "github.com/skip2/go-qrcode"
 )
 
 var PixelGIF []byte
+
+const DeliverySecurityScanWindow = 5 * time.Second
 
 func init() {
 	PixelGIF, _ = base64.StdEncoding.DecodeString("R0lGODlhAQABAPAAAP///wAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==")
@@ -56,9 +59,11 @@ func NewSQLiteRecorder(db *sql.DB) SQLiteRecorder {
 
 func (r SQLiteRecorder) RecordOpen(event Event) error {
 	var recipientID int64
-	if err := r.db.QueryRow(`SELECT id FROM campaign_recipients WHERE tracking_id=?`, event.TrackingID).Scan(&recipientID); err != nil {
+	var sentAt string
+	if err := r.db.QueryRow(`SELECT id,COALESCE(sent_at,'') FROM campaign_recipients WHERE tracking_id=?`, event.TrackingID).Scan(&recipientID, &sentAt); err != nil {
 		return err
 	}
+	isPrefetch := LooksLikePrefetch(event.UserAgent) || LooksLikeDeliverySecurityScan(sentAt, time.Now())
 	_, err := r.db.Exec(
 		`INSERT INTO open_events(campaign_recipient_id,tracking_id,event_index,ip,user_agent,is_prefetch) VALUES(?,?,?,?,?,?)`,
 		recipientID,
@@ -66,10 +71,13 @@ func (r SQLiteRecorder) RecordOpen(event Event) error {
 		event.EventIndex,
 		event.IP,
 		event.UserAgent,
-		LooksLikePrefetch(event.UserAgent),
+		isPrefetch,
 	)
 	if err != nil {
 		return err
+	}
+	if isPrefetch {
+		return nil
 	}
 	_, err = r.db.Exec(
 		`UPDATE campaign_recipients SET open_count=open_count+1, first_opened_at=COALESCE(first_opened_at,CURRENT_TIMESTAMP), last_opened_at=CURRENT_TIMESTAMP WHERE id=?`,
@@ -81,7 +89,12 @@ func (r SQLiteRecorder) RecordOpen(event Event) error {
 func (r SQLiteRecorder) RecordMark(event MarkEvent) error {
 	var markID int64
 	var kind string
-	if err := r.db.QueryRow(`SELECT id,kind FROM tracking_marks WHERE token=?`, event.Token).Scan(&markID, &kind); err != nil {
+	var sentAt string
+	if err := r.db.QueryRow(`
+		SELECT tm.id,tm.kind,COALESCE(cr.sent_at,'')
+		FROM tracking_marks tm
+		JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id
+		WHERE tm.token=?`, event.Token).Scan(&markID, &kind, &sentAt); err != nil {
 		markID = 0
 		kind = event.Kind
 	}
@@ -101,7 +114,7 @@ func (r SQLiteRecorder) RecordMark(event MarkEvent) error {
 		event.Referer,
 		event.AcceptLanguage,
 		event.ForwardedFor,
-		LooksLikePrefetch(event.UserAgent),
+		LooksLikePrefetch(event.UserAgent) || LooksLikeDeliverySecurityScan(sentAt, time.Now()),
 		event.Raw,
 	)
 	return err
@@ -279,6 +292,39 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func LooksLikeDeliverySecurityScan(sentAt string, eventAt time.Time) bool {
+	sent, ok := parseTime(sentAt)
+	if !ok || eventAt.IsZero() {
+		return false
+	}
+	diff := eventAt.Sub(sent)
+	return diff >= 0 && diff <= DeliverySecurityScanWindow
+}
+
+func ParseEventTime(value string) (time.Time, bool) {
+	return parseTime(value)
+}
+
+func parseTime(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, value); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func intString(value int) string {

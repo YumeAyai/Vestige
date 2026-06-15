@@ -544,6 +544,9 @@ func (s *Server) previewTemplate(c *gin.Context) {
 		TrackingImage: func(asset string) template.HTML {
 			return template.HTML(tracker.TrackingImageHTML(s.trackingBaseURL(c), "preview", asset, "企业微信二维码", 176))
 		},
+		TrackingLink: func(_ string, targetURL string) template.URL {
+			return template.URL(strings.TrimSpace(targetURL))
+		},
 	})
 	if err != nil {
 		fail(c, err)
@@ -642,7 +645,7 @@ func (s *Server) createCampaign(c *gin.Context) {
 	}
 	defer tx.Rollback()
 	res, err := tx.Exec(`INSERT INTO campaigns(name,subject,body_html,mailbox_id,tracking_enabled,status) VALUES(?,?,?,?,?,'draft')`,
-		input.Name, input.Subject, input.BodyHTML, input.MailboxID, input.TrackingEnabled)
+		input.Name, input.Subject, input.BodyHTML, input.MailboxID, true)
 	if err != nil {
 		fail(c, err)
 		return
@@ -722,6 +725,7 @@ func (s *Server) sendCampaign(c *gin.Context) {
 	baseURL := s.trackingBaseURL(c)
 	sourceToken := s.trackingSourceToken()
 	_, _ = s.db.Exec(`UPDATE campaigns SET status='sending' WHERE id=?`, campaignID)
+	_, _ = s.db.Exec(`UPDATE campaign_recipients SET send_status='waiting',failure_reason='' WHERE campaign_id=? AND send_status IN ('pending','failed')`, campaignID)
 	go s.runCampaignSend(campaignID, baseURL, sourceToken)
 	c.Status(http.StatusAccepted)
 }
@@ -744,7 +748,7 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 		_, _ = s.db.Exec(`UPDATE campaigns SET status='partial_failed' WHERE id=?`, campaignID)
 		return
 	}
-	rows, err := s.db.Query(`SELECT cr.id,cr.contact_id,cr.email,cr.name,cr.tracking_id,COALESCE(cr.variant_id,0),c.company,c.department,c.phone,c.tags,c.notes FROM campaign_recipients cr JOIN contacts c ON c.id=cr.contact_id WHERE cr.campaign_id=? AND cr.send_status IN ('pending','failed')`, campaignID)
+	rows, err := s.db.Query(`SELECT cr.id,cr.contact_id,cr.email,cr.name,cr.tracking_id,COALESCE(cr.variant_id,0),c.company,c.department,c.phone,c.tags,c.notes FROM campaign_recipients cr JOIN contacts c ON c.id=cr.contact_id WHERE cr.campaign_id=? AND cr.send_status IN ('waiting','failed')`, campaignID)
 	if err != nil {
 		_, _ = s.db.Exec(`UPDATE campaigns SET status='partial_failed' WHERE id=?`, campaignID)
 		return
@@ -803,6 +807,21 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 			TrackingImage: func(asset string) template.HTML {
 				return template.HTML(tracker.TrackingImageHTMLWithSourceAndIndex(baseURL, sourceToken, markToken, asset, "企业微信二维码", 176, eventScope+":image:"+asset))
 			},
+			TrackingLink: func(label, targetURL string) template.URL {
+				linkLabel := strings.TrimSpace(label)
+				if linkLabel == "" {
+					linkLabel = "链接"
+				}
+				linkTarget := strings.TrimSpace(targetURL)
+				if linkTarget == "" {
+					linkTarget = s.qrcodeTargetURL(rec.TrackingID)
+				}
+				linkToken, err := s.ensureTrackingMarkForTarget(rec.ID, "click", linkLabel, linkTarget)
+				if err != nil {
+					return template.URL(linkTarget)
+				}
+				return template.URL(tracker.RedirectURLWithSourceAndIndex(baseURL, sourceToken, strconv.FormatInt(campaign.ID, 10), linkLabel, linkToken, linkTarget, eventScope+":click:"+linkLabel))
+			},
 		}
 		subject, err := mailer.RenderBody(subjectTemplate, data)
 		if err != nil {
@@ -811,7 +830,7 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 			continue
 		}
 		body, err := mailer.RenderBody(bodyTemplate, data)
-		if err == nil && campaign.TrackingEnabled {
+		if err == nil {
 			body = tracker.InjectPixelWithSourceAndIndex(body, baseURL, sourceToken, rec.TrackingID, strconv.FormatInt(campaign.ID, 10), eventScope+":open")
 		}
 		if err == nil {
@@ -866,7 +885,7 @@ func (s *Server) prepareCampaignVariants(campaignID int64) (map[int64]campaignVa
 		return byID, nil
 	}
 
-	recRows, err := s.db.Query(`SELECT id FROM campaign_recipients WHERE campaign_id=? AND variant_id IS NULL AND send_status IN ('pending','failed') ORDER BY id`, campaignID)
+	recRows, err := s.db.Query(`SELECT id FROM campaign_recipients WHERE campaign_id=? AND variant_id IS NULL AND send_status IN ('pending','waiting','failed') ORDER BY id`, campaignID)
 	if err != nil {
 		return nil, err
 	}
@@ -920,6 +939,8 @@ func (s *Server) campaignStats(c *gin.Context) {
 		Total          int `json:"total"`
 		Sent           int `json:"sent"`
 		Failed         int `json:"failed"`
+		Pending        int `json:"pending"`
+		Waiting        int `json:"waiting"`
 		Opened         int `json:"opened"`
 		Unopened       int `json:"unopened"`
 		QRLoaded       int `json:"qr_loaded"`
@@ -934,6 +955,8 @@ func (s *Server) campaignStats(c *gin.Context) {
 			COUNT(*),
 			COALESCE(SUM(send_status='sent'),0),
 			COALESCE(SUM(send_status='failed'),0),
+			COALESCE(SUM(send_status='pending'),0),
+			COALESCE(SUM(send_status='waiting'),0),
 			COALESCE(SUM(open_count>0),0),
 			COALESCE(SUM(open_count=0),0),
 			COALESCE(SUM(qr_load_count>0),0),
@@ -961,7 +984,7 @@ func (s *Server) campaignStats(c *gin.Context) {
 			WHERE cr.campaign_id=?
 			GROUP BY cr.id
 		)`, id).
-		Scan(&stats.Total, &stats.Sent, &stats.Failed, &stats.Opened, &stats.Unopened, &stats.QRLoaded, &stats.QRLoadEvents, &stats.QRNotLoaded, &stats.PrefetchEvents, &stats.Clicked, &stats.ClickEvents)
+		Scan(&stats.Total, &stats.Sent, &stats.Failed, &stats.Pending, &stats.Waiting, &stats.Opened, &stats.Unopened, &stats.QRLoaded, &stats.QRLoadEvents, &stats.QRNotLoaded, &stats.PrefetchEvents, &stats.Clicked, &stats.ClickEvents)
 
 	rows, _ := s.db.Query(`SELECT strftime('%Y-%m-%d %H:00', opened_at) hour, COUNT(*) FROM open_events oe JOIN campaign_recipients cr ON cr.id=oe.campaign_recipient_id WHERE cr.campaign_id=? GROUP BY hour ORDER BY hour`, id)
 	defer closeRows(rows)
@@ -1479,6 +1502,27 @@ func (s *Server) ensureTrackingMark(recipientID int64, kind, label, targetURL st
 	return token, err
 }
 
+func (s *Server) ensureTrackingMarkForTarget(recipientID int64, kind, label, targetURL string) (string, error) {
+	var token string
+	err := s.db.QueryRow(`SELECT token FROM tracking_marks WHERE campaign_recipient_id=? AND kind=? AND label=? AND target_url=?`, recipientID, kind, label, targetURL).Scan(&token)
+	if err == nil {
+		return token, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	token = uuid.NewString()
+	_, err = s.db.Exec(
+		`INSERT INTO tracking_marks(campaign_recipient_id,token,kind,label,target_url) VALUES(?,?,?,?,?)`,
+		recipientID,
+		token,
+		kind,
+		label,
+		targetURL,
+	)
+	return token, err
+}
+
 func (s *Server) recordCloudTrackingEvent(event cloudTrackingEventInput, raw string) error {
 	if event.Kind == "open" {
 		return s.recordCloudOpenEvent(event, raw)
@@ -1488,10 +1532,16 @@ func (s *Server) recordCloudTrackingEvent(event cloudTrackingEventInput, raw str
 
 func (s *Server) recordCloudOpenEvent(event cloudTrackingEventInput, _ string) error {
 	var recipientID int64
-	if err := s.db.QueryRow(`SELECT id FROM campaign_recipients WHERE tracking_id=?`, event.Token).Scan(&recipientID); err != nil {
+	var sentAt string
+	if err := s.db.QueryRow(`SELECT id,COALESCE(sent_at,'') FROM campaign_recipients WHERE tracking_id=?`, event.Token).Scan(&recipientID, &sentAt); err != nil {
 		return err
 	}
 	triggeredAt := strings.TrimSpace(event.TriggeredAt)
+	eventAt := time.Now()
+	if parsed, ok := tracker.ParseEventTime(triggeredAt); ok {
+		eventAt = parsed
+	}
+	isPrefetch := tracker.LooksLikePrefetch(event.UserAgent) || tracker.LooksLikeDeliverySecurityScan(sentAt, eventAt)
 	if triggeredAt == "" {
 		_, err := s.db.Exec(
 			`INSERT INTO open_events(campaign_recipient_id,tracking_id,event_index,ip,user_agent,is_prefetch) VALUES(?,?,?,?,?,?)`,
@@ -1500,7 +1550,7 @@ func (s *Server) recordCloudOpenEvent(event cloudTrackingEventInput, _ string) e
 			event.EventIndex,
 			event.IP,
 			event.UserAgent,
-			tracker.LooksLikePrefetch(event.UserAgent),
+			isPrefetch,
 		)
 		if err != nil {
 			return err
@@ -1513,12 +1563,15 @@ func (s *Server) recordCloudOpenEvent(event cloudTrackingEventInput, _ string) e
 			event.EventIndex,
 			event.IP,
 			event.UserAgent,
-			tracker.LooksLikePrefetch(event.UserAgent),
+			isPrefetch,
 			triggeredAt,
 		)
 		if err != nil {
 			return err
 		}
+	}
+	if isPrefetch {
+		return nil
 	}
 	_, err := s.db.Exec(
 		`UPDATE campaign_recipients SET open_count=open_count+1, first_opened_at=COALESCE(first_opened_at,?), last_opened_at=COALESCE(NULLIF(?,''),CURRENT_TIMESTAMP) WHERE id=?`,
@@ -1532,7 +1585,12 @@ func (s *Server) recordCloudOpenEvent(event cloudTrackingEventInput, _ string) e
 func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string) error {
 	var markID int64
 	var kind string
-	if err := s.db.QueryRow(`SELECT id,kind FROM tracking_marks WHERE token=?`, event.Token).Scan(&markID, &kind); err != nil {
+	var sentAt string
+	if err := s.db.QueryRow(`
+		SELECT tm.id,tm.kind,COALESCE(cr.sent_at,'')
+		FROM tracking_marks tm
+		JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id
+		WHERE tm.token=?`, event.Token).Scan(&markID, &kind, &sentAt); err != nil {
 		return err
 	}
 	if event.Kind != "" {
@@ -1542,6 +1600,11 @@ func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string)
 		kind = "unknown"
 	}
 	triggeredAt := strings.TrimSpace(event.TriggeredAt)
+	eventAt := time.Now()
+	if parsed, ok := tracker.ParseEventTime(triggeredAt); ok {
+		eventAt = parsed
+	}
+	isPrefetch := tracker.LooksLikePrefetch(event.UserAgent) || tracker.LooksLikeDeliverySecurityScan(sentAt, eventAt)
 	if triggeredAt == "" {
 		_, err := s.db.Exec(
 			`INSERT INTO tracking_mark_events(mark_id,token,kind,event_index,source,ip,user_agent,referer,accept_language,forwarded_for,is_prefetch,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?,?)`,
@@ -1555,7 +1618,7 @@ func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string)
 			event.Referer,
 			event.AcceptLanguage,
 			event.ForwardedFor,
-			tracker.LooksLikePrefetch(event.UserAgent),
+			isPrefetch,
 			raw,
 		)
 		return err
@@ -1572,7 +1635,7 @@ func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string)
 		event.Referer,
 		event.AcceptLanguage,
 		event.ForwardedFor,
-		tracker.LooksLikePrefetch(event.UserAgent),
+		isPrefetch,
 		raw,
 		triggeredAt,
 	)

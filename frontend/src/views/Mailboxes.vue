@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
 import { api } from '../services/api'
+import { askConfirm } from '../utils/dialog'
 
 const smtpPresets = [
   { id: '', label: '手动配置', host: '', port: 465, use_tls: true },
@@ -96,7 +97,7 @@ async function testMailbox() {
 }
 
 async function removeMailbox(item) {
-  if (!confirm(`确认删除发件邮箱「${item.name}」？`)) return
+  if (!(await askConfirm(`确认删除发件邮箱「${item.name}」？`))) return
   error.value = ''
   try {
     await api.deleteMailbox(item.id)
@@ -135,7 +136,6 @@ onMounted(load)
         <label>授权码/密码<input v-model="form.password" type="password" required /></label>
         <label>发件邮箱<input v-model="form.from_email" type="email" required @blur="syncEmailFields" /></label>
         <label>发件人名称<input v-model="form.from_name" required /></label>
-        <label><span><input v-model="form.use_tls" type="checkbox" style="width:auto" /> 使用 TLS / STARTTLS</span></label>
         <label>测试收件邮箱<input v-model="testToEmail" type="email" placeholder="默认发送到发件邮箱" /></label>
         <div class="toolbar">
           <button :disabled="saving">保存邮箱</button>

@@ -1,6 +1,7 @@
 package mailer
 
 import (
+	"html/template"
 	"strings"
 	"testing"
 
@@ -43,5 +44,28 @@ func TestNormalizeMailboxTrimsAddressFields(t *testing.T) {
 	}
 	if got.FromName != "见迹" {
 		t.Fatalf("unexpected from name: %q", got.FromName)
+	}
+}
+
+func TestRenderBodySupportsTrackingLink(t *testing.T) {
+	body, err := RenderBody(
+		`<a href="{{TrackingLink "官网" "https://example.com/path?a=1&b=2"}}">查看详情</a>`,
+		Personalization{
+			TrackingLink: func(label, targetURL string) template.URL {
+				if label != "官网" {
+					t.Fatalf("unexpected label: %q", label)
+				}
+				if targetURL != "https://example.com/path?a=1&b=2" {
+					t.Fatalf("unexpected target URL: %q", targetURL)
+				}
+				return template.URL("https://track.example/r?rid=abc&dest=https%3A%2F%2Fexample.com%2Fpath")
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body, `href="https://track.example/r?rid=abc&amp;dest=https%3A%2F%2Fexample.com%2Fpath"`) {
+		t.Fatalf("tracking link was not rendered in href: %s", body)
 	}
 }
