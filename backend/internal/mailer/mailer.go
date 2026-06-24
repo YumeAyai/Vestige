@@ -63,13 +63,22 @@ func Send(mailbox models.Mailbox, toEmail, toName, subject, html string) error {
 	if err := ValidateMailbox(mailbox); err != nil {
 		return err
 	}
-	toEmail = NormalizeEmail(toEmail)
-	if err := ValidateEmail(toEmail, "收件邮箱"); err != nil {
+	toEmail = NormalizeEmailList(toEmail)
+	toEmails, err := ParseEmailList(toEmail, "收件邮箱")
+	if err != nil {
 		return err
 	}
 	msg := gomail.NewMessage()
 	msg.SetAddressHeader("From", mailbox.FromEmail, mailbox.FromName)
-	msg.SetAddressHeader("To", toEmail, toName)
+	if len(toEmails) == 1 {
+		msg.SetAddressHeader("To", toEmails[0], toName)
+	} else {
+		formatted := make([]string, 0, len(toEmails))
+		for _, email := range toEmails {
+			formatted = append(formatted, msg.FormatAddress(email, toName))
+		}
+		msg.SetHeader("To", formatted...)
+	}
 	msg.SetHeader("Subject", subject)
 	msg.SetBody("text/html", html)
 
@@ -135,6 +144,11 @@ func NormalizeEmail(email string) string {
 	return strings.TrimSpace(email)
 }
 
+func NormalizeEmailList(emailList string) string {
+	parts := splitEmailList(emailList)
+	return strings.Join(parts, ";")
+}
+
 func ValidateEmail(email, field string) error {
 	email = NormalizeEmail(email)
 	if email == "" {
@@ -161,6 +175,37 @@ func ValidateEmail(email, field string) error {
 		}
 	}
 	return nil
+}
+
+func ValidateEmailList(emailList, field string) error {
+	_, err := ParseEmailList(emailList, field)
+	return err
+}
+
+func ParseEmailList(emailList, field string) ([]string, error) {
+	emails := splitEmailList(emailList)
+	if len(emails) == 0 {
+		return nil, errors.New(field + "不能为空")
+	}
+	for _, email := range emails {
+		if err := ValidateEmail(email, field); err != nil {
+			return nil, err
+		}
+	}
+	return emails, nil
+}
+
+func splitEmailList(emailList string) []string {
+	parts := strings.FieldsFunc(emailList, func(r rune) bool {
+		return r == ';' || r == '；'
+	})
+	emails := []string{}
+	for _, part := range parts {
+		if email := NormalizeEmail(part); email != "" {
+			emails = append(emails, email)
+		}
+	}
+	return emails
 }
 
 func explainSMTPError(err error) error {

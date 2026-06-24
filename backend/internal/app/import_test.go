@@ -97,3 +97,44 @@ func TestImportContactsSkipsInvalidEmail(t *testing.T) {
 		t.Fatalf("expected invalid email to be skipped, got %d rows", count)
 	}
 }
+
+func TestImportContactsAllowsSemicolonSeparatedEmails(t *testing.T) {
+	conn, err := localdb.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if err := localdb.Migrate(conn); err != nil {
+		t.Fatal(err)
+	}
+
+	router := New(conn, os.DirFS(t.TempDir()))
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("file", "contacts.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte("公司名,邮箱\nAcme,hello@example.com; ops@example.com\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/contacts/import", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var email string
+	if err := conn.QueryRow(`SELECT email FROM contacts WHERE company='Acme'`).Scan(&email); err != nil {
+		t.Fatal(err)
+	}
+	if email != "hello@example.com;ops@example.com" {
+		t.Fatalf("unexpected normalized email list: %q", email)
+	}
+}

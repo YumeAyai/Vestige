@@ -61,10 +61,25 @@ func TestValidateEmailRejectsInvalidFormats(t *testing.T) {
 		"user name@example.com",
 		"User <user@example.com>",
 		"user@example.com,other@example.com",
+		"user@example.com;other@example.com",
 	} {
 		if err := ValidateEmail(email, "邮箱"); err == nil {
 			t.Fatalf("expected %q to be invalid", email)
 		}
+	}
+}
+
+func TestValidateEmailListAcceptsSemicolonSeparatedAddresses(t *testing.T) {
+	if err := ValidateEmailList("sales@example.com; ops@example.com；support@example.co.uk", "邮箱"); err != nil {
+		t.Fatalf("expected valid email list, got %v", err)
+	}
+}
+
+func TestNormalizeEmailListTrimsSeparatedAddresses(t *testing.T) {
+	got := NormalizeEmailList(" sales@example.com ; ops@example.com； support@example.com ")
+	want := "sales@example.com;ops@example.com;support@example.com"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
 	}
 }
 
