@@ -47,6 +47,47 @@ func TestNormalizeMailboxTrimsAddressFields(t *testing.T) {
 	}
 }
 
+func TestValidateEmailAcceptsCommonAddress(t *testing.T) {
+	if err := ValidateEmail("sales+cn@example.co.uk", "邮箱"); err != nil {
+		t.Fatalf("expected valid email, got %v", err)
+	}
+}
+
+func TestValidateEmailRejectsInvalidFormats(t *testing.T) {
+	for _, email := range []string{
+		"not-an-email",
+		"user@localhost",
+		"user@example",
+		"user name@example.com",
+		"User <user@example.com>",
+		"user@example.com,other@example.com",
+	} {
+		if err := ValidateEmail(email, "邮箱"); err == nil {
+			t.Fatalf("expected %q to be invalid", email)
+		}
+	}
+}
+
+func TestSendRejectsInvalidRecipientBeforeDialing(t *testing.T) {
+	err := Send(
+		models.Mailbox{
+			Host:      "127.0.0.1",
+			Port:      1,
+			Username:  "sender@example.com",
+			Password:  "secret",
+			FromEmail: "sender@example.com",
+			FromName:  "Sender",
+		},
+		"bad-address",
+		"Bad",
+		"Subject",
+		"<p>Hello</p>",
+	)
+	if err == nil || !strings.Contains(err.Error(), "收件邮箱格式不正确") {
+		t.Fatalf("expected recipient validation error, got %v", err)
+	}
+}
+
 func TestRenderBodySupportsTrackingLink(t *testing.T) {
 	body, err := RenderBody(
 		`<a href="{{TrackingLink "官网" "https://example.com/path?a=1&b=2"}}">查看详情</a>`,

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"html/template"
 	"net"
+	"net/mail"
 	"net/textproto"
 	"strings"
 
@@ -62,6 +63,10 @@ func Send(mailbox models.Mailbox, toEmail, toName, subject, html string) error {
 	if err := ValidateMailbox(mailbox); err != nil {
 		return err
 	}
+	toEmail = NormalizeEmail(toEmail)
+	if err := ValidateEmail(toEmail, "收件邮箱"); err != nil {
+		return err
+	}
 	msg := gomail.NewMessage()
 	msg.SetAddressHeader("From", mailbox.FromEmail, mailbox.FromName)
 	msg.SetAddressHeader("To", toEmail, toName)
@@ -95,6 +100,9 @@ func ValidateMailbox(mailbox models.Mailbox) error {
 	if len(missing) > 0 {
 		return errors.New("SMTP 配置缺少：" + strings.Join(missing, "、"))
 	}
+	if err := ValidateEmail(mailbox.FromEmail, "发件邮箱"); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -117,10 +125,42 @@ func NormalizeMailbox(mailbox models.Mailbox) models.Mailbox {
 	mailbox.Name = strings.TrimSpace(mailbox.Name)
 	mailbox.Host = strings.TrimSpace(mailbox.Host)
 	mailbox.Username = strings.TrimSpace(mailbox.Username)
-	mailbox.FromEmail = strings.TrimSpace(mailbox.FromEmail)
+	mailbox.FromEmail = NormalizeEmail(mailbox.FromEmail)
 	mailbox.FromName = strings.TrimSpace(mailbox.FromName)
 	mailbox.UseTLS = true
 	return mailbox
+}
+
+func NormalizeEmail(email string) string {
+	return strings.TrimSpace(email)
+}
+
+func ValidateEmail(email, field string) error {
+	email = NormalizeEmail(email)
+	if email == "" {
+		return errors.New(field + "不能为空")
+	}
+	if strings.ContainsAny(email, " \t\r\n,;<>") {
+		return errors.New(field + "格式不正确")
+	}
+	addr, err := mail.ParseAddress(email)
+	if err != nil || addr.Address != email {
+		return errors.New(field + "格式不正确")
+	}
+	at := strings.LastIndex(email, "@")
+	if at <= 0 || at == len(email)-1 {
+		return errors.New(field + "格式不正确")
+	}
+	domain := email[at+1:]
+	if !strings.Contains(domain, ".") {
+		return errors.New(field + "格式不正确")
+	}
+	for _, label := range strings.Split(domain, ".") {
+		if label == "" {
+			return errors.New(field + "格式不正确")
+		}
+	}
+	return nil
 }
 
 func explainSMTPError(err error) error {

@@ -131,6 +131,7 @@ func (s *Server) createMailbox(c *gin.Context) {
 	if bind(c, &input) != nil {
 		return
 	}
+	input = mailer.NormalizeMailbox(input)
 	if err := mailer.ValidateMailbox(input); err != nil {
 		fail(c, err)
 		return
@@ -265,6 +266,11 @@ func (s *Server) createContact(c *gin.Context) {
 	if bind(c, &input) != nil {
 		return
 	}
+	input.Email = mailer.NormalizeEmail(input.Email)
+	if err := mailer.ValidateEmail(input.Email, "邮箱"); err != nil {
+		fail(c, err)
+		return
+	}
 	if input.Name == "" {
 		input.Name = input.Email
 	}
@@ -365,7 +371,8 @@ func (s *Server) importContacts(c *gin.Context) {
 
 	imported, skipped := 0, 0
 	for _, contact := range contacts {
-		if contact.Email == "" {
+		contact.Email = mailer.NormalizeEmail(contact.Email)
+		if err := mailer.ValidateEmail(contact.Email, "邮箱"); err != nil {
 			skipped++
 			continue
 		}
@@ -784,6 +791,13 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 	for _, target := range targets {
 		rec := target.recipient
 		contact := target.contact
+		rec.Email = mailer.NormalizeEmail(rec.Email)
+		contact.Email = rec.Email
+		if err := mailer.ValidateEmail(rec.Email, "收件邮箱"); err != nil {
+			failed++
+			_, _ = s.db.Exec(`UPDATE campaign_recipients SET send_status='failed',failure_reason=? WHERE id=?`, err.Error(), rec.ID)
+			continue
+		}
 		subjectTemplate := firstNonEmpty(target.variant.Subject, campaign.Subject)
 		bodyTemplate := firstNonEmpty(target.variant.BodyHTML, campaign.BodyHTML)
 		eventScope := campaignEventScope(campaign.ID, target.variant.ID)
