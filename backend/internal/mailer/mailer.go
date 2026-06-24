@@ -67,17 +67,18 @@ func Send(mailbox models.Mailbox, toEmail, toName, subject, html string) error {
 	if err != nil {
 		return err
 	}
+	for _, email := range toEmails {
+		if err := sendOne(mailbox, email, toName, subject, html); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sendOne(mailbox models.Mailbox, toEmail, toName, subject, html string) error {
 	msg := gomail.NewMessage()
 	msg.SetAddressHeader("From", mailbox.FromEmail, mailbox.FromName)
-	if len(toEmails) == 1 {
-		msg.SetAddressHeader("To", toEmails[0], toName)
-	} else {
-		formatted := make([]string, 0, len(toEmails))
-		for _, email := range toEmails {
-			formatted = append(formatted, msg.FormatAddress(email, toName))
-		}
-		msg.SetHeader("To", formatted...)
-	}
+	msg.SetAddressHeader("To", toEmail, toName)
 	msg.SetHeader("Subject", subject)
 	msg.SetBody("text/html", html)
 

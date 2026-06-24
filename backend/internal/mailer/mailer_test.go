@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"Vestige/pkg/models"
+
+	"gopkg.in/gomail.v2"
 )
 
 func TestValidateMailboxReportsMissingFields(t *testing.T) {
@@ -101,6 +103,21 @@ func TestParseEmailListKeepsValidAddressesWhenSomeAreInvalid(t *testing.T) {
 	want := []string{"sales@example.com", "ops@example.com"}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("expected %#v, got %#v", want, got)
+	}
+}
+
+func TestSingleRecipientMessageFormatsChineseName(t *testing.T) {
+	msg := gomail.NewMessage()
+	msg.SetAddressHeader("To", "pr@1hai.cn", "上海一嗨汽车租赁有限公司")
+	got := msg.GetHeader("To")
+	if len(got) != 1 {
+		t.Fatalf("expected one To header, got %#v", got)
+	}
+	if strings.Contains(got[0], ";") {
+		t.Fatalf("expected single recipient header without semicolon list, got %q", got[0])
+	}
+	if !strings.Contains(got[0], "<pr@1hai.cn>") {
+		t.Fatalf("expected formatted recipient address, got %q", got[0])
 	}
 }
 
