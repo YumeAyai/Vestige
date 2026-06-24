@@ -50,7 +50,7 @@ func TestCreateContactAllowsSemicolonSeparatedEmails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	body, _ := json.Marshal(map[string]string{"name": "Multi", "email": "one@example.com; two@example.com"})
+	body, _ := json.Marshal(map[string]string{"name": "Multi", "email": "one@example.com; bad-address; 用户@example.com; two@example.com"})
 	req := httptest.NewRequest(http.MethodPost, "/api/contacts", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()

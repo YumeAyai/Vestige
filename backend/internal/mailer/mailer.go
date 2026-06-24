@@ -63,7 +63,6 @@ func Send(mailbox models.Mailbox, toEmail, toName, subject, html string) error {
 	if err := ValidateMailbox(mailbox); err != nil {
 		return err
 	}
-	toEmail = NormalizeEmailList(toEmail)
 	toEmails, err := ParseEmailList(toEmail, "收件邮箱")
 	if err != nil {
 		return err
@@ -145,14 +144,17 @@ func NormalizeEmail(email string) string {
 }
 
 func NormalizeEmailList(emailList string) string {
-	parts := splitEmailList(emailList)
-	return strings.Join(parts, ";")
+	emails, _ := filterEmailList(emailList)
+	return strings.Join(emails, ";")
 }
 
 func ValidateEmail(email, field string) error {
 	email = NormalizeEmail(email)
 	if email == "" {
 		return errors.New(field + "不能为空")
+	}
+	if !isASCII(email) {
+		return errors.New(field + "格式不正确")
 	}
 	if strings.ContainsAny(email, " \t\r\n,;<>") {
 		return errors.New(field + "格式不正确")
@@ -183,16 +185,25 @@ func ValidateEmailList(emailList, field string) error {
 }
 
 func ParseEmailList(emailList, field string) ([]string, error) {
-	emails := splitEmailList(emailList)
-	if len(emails) == 0 {
+	emails, total := filterEmailList(emailList)
+	if total == 0 {
 		return nil, errors.New(field + "不能为空")
 	}
-	for _, email := range emails {
-		if err := ValidateEmail(email, field); err != nil {
-			return nil, err
-		}
+	if len(emails) == 0 {
+		return nil, errors.New(field + "格式不正确")
 	}
 	return emails, nil
+}
+
+func filterEmailList(emailList string) ([]string, int) {
+	parts := splitEmailList(emailList)
+	emails := []string{}
+	for _, email := range parts {
+		if ValidateEmail(email, "邮箱") == nil {
+			emails = append(emails, email)
+		}
+	}
+	return emails, len(parts)
 }
 
 func splitEmailList(emailList string) []string {
@@ -206,6 +217,15 @@ func splitEmailList(emailList string) []string {
 		}
 	}
 	return emails
+}
+
+func isASCII(value string) bool {
+	for _, r := range value {
+		if r > 127 {
+			return false
+		}
+	}
+	return true
 }
 
 func explainSMTPError(err error) error {

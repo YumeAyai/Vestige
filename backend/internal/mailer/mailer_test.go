@@ -62,6 +62,8 @@ func TestValidateEmailRejectsInvalidFormats(t *testing.T) {
 		"User <user@example.com>",
 		"user@example.com,other@example.com",
 		"user@example.com;other@example.com",
+		"用户@example.com",
+		"user@例子.com",
 	} {
 		if err := ValidateEmail(email, "邮箱"); err == nil {
 			t.Fatalf("expected %q to be invalid", email)
@@ -80,6 +82,25 @@ func TestNormalizeEmailListTrimsSeparatedAddresses(t *testing.T) {
 	want := "sales@example.com;ops@example.com;support@example.com"
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestNormalizeEmailListDropsInvalidAddresses(t *testing.T) {
+	got := NormalizeEmailList("sales@example.com; bad-address;用户@example.com; ops@example.com")
+	want := "sales@example.com;ops@example.com"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestParseEmailListKeepsValidAddressesWhenSomeAreInvalid(t *testing.T) {
+	got, err := ParseEmailList("sales@example.com;bad-address;ops@example.com", "邮箱")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"sales@example.com", "ops@example.com"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("expected %#v, got %#v", want, got)
 	}
 }
 

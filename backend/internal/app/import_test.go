@@ -115,7 +115,7 @@ func TestImportContactsAllowsSemicolonSeparatedEmails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := part.Write([]byte("公司名,邮箱\nAcme,hello@example.com; ops@example.com\n")); err != nil {
+	if _, err := part.Write([]byte("公司名,邮箱\nAcme,hello@example.com; bad-address；用户@example.com; ops@example.com\n")); err != nil {
 		t.Fatal(err)
 	}
 	if err := writer.Close(); err != nil {
