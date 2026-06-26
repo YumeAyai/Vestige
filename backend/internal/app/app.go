@@ -12,7 +12,6 @@ import (
 	"io/fs"
 	"mime"
 	"mime/multipart"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -40,11 +39,9 @@ type Server struct {
 	cfg              config.Config
 	sendingCampaigns sync.Map
 	cloudSyncMu      sync.Mutex
-	ipPortraitCache  sync.Map
 }
 
 var cloudHTTPClient = &http.Client{Timeout: 2500 * time.Millisecond}
-var ipPortraitHTTPClient = &http.Client{Timeout: 1200 * time.Millisecond}
 
 func New(db *sql.DB, frontend fs.FS) *gin.Engine {
 	return NewWithConfig(db, frontend, config.MustLoadDefault())
@@ -1187,6 +1184,7 @@ type cloudTrackingEventInput struct {
 	Referer        string `json:"referer"`
 	AcceptLanguage string `json:"accept_language"`
 	ForwardedFor   string `json:"forwarded_for"`
+	IPRisk         string `json:"ip_risk"`
 }
 
 type importCloudTrackingEventsInput struct {
@@ -1698,159 +1696,11 @@ func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string)
 
 func (s *Server) cloudEventPrefetchInsight(event cloudTrackingEventInput, sentAt string, eventAt time.Time) (bool, string) {
 	isPrefetch := tracker.LooksLikePrefetch(event.UserAgent) || tracker.LooksLikeDeliverySecurityScan(sentAt, eventAt)
-	ipPrefetch, ipRisk := s.ipPortraitPrefetchInsight(event.IP)
-	return isPrefetch || ipPrefetch, ipRisk
-}
-
-type ipPortraitBriefResponse struct {
-	Code int `json:"code"`
-	Data struct {
-		Scene         string                              `json:"scene"`
-		Company       string                              `json:"company"`
-		RiskScore     string                              `json:"risk_score"`
-		SecurityRisks map[string][]ipPortraitRiskCategory `json:"security_risks"`
-		HitRiskNum    int                                 `json:"hit_risk_num"`
-	} `json:"data"`
-}
-
-type ipPortraitRiskCategory struct {
-	Label    string   `json:"label"`
-	SubItems []string `json:"subItems"`
-}
-
-type ipPortraitInsight struct {
-	Prefetch bool
-	Summary  string
-}
-
-func (s *Server) ipPortraitPrefetchInsight(ip string) (bool, string) {
-	ip = strings.TrimSpace(ip)
-	if ip == "" || ipPortraitIsLocal(ip) {
-		return false, ""
+	ipRisk := strings.TrimSpace(event.IPRisk)
+	if ipRisk != "" && containsAnyRiskText([]string{ipRisk}, "机房", "idc", "数据中心", "云主机", "云服务", "cdn", "代理", "vpn", "服务器", "托管", "劫持", "非正常设备", "黑rom") {
+		isPrefetch = true
 	}
-	endpoint := strings.TrimSpace(s.cfg.Client.IPPortraitURL)
-	if endpoint == "" {
-		return false, ""
-	}
-	if cached, ok := s.ipPortraitCache.Load(ip); ok {
-		result, _ := cached.(ipPortraitInsight)
-		return result.Prefetch, result.Summary
-	}
-	requestURL, err := ipPortraitURL(endpoint, ip)
-	if err != nil {
-		return false, ""
-	}
-	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
-	if err != nil {
-		return false, ""
-	}
-	req.Header.Set("Referer", ipPortraitReferer(ip))
-	res, err := ipPortraitHTTPClient.Do(req)
-	if err != nil {
-		return false, ""
-	}
-	defer res.Body.Close()
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return false, ""
-	}
-	var payload ipPortraitBriefResponse
-	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil || payload.Code != http.StatusOK {
-		return false, ""
-	}
-	result := ipPortraitInsight{
-		Prefetch: ipPortraitIndicatesPrefetch(payload),
-		Summary:  ipPortraitSummary(payload),
-	}
-	s.ipPortraitCache.Store(ip, result)
-	return result.Prefetch, result.Summary
-}
-
-func ipPortraitURL(endpoint, ip string) (string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(endpoint))
-	if err != nil {
-		return "", err
-	}
-	values := parsed.Query()
-	values.Set("ip", ip)
-	parsed.RawQuery = values.Encode()
-	return parsed.String(), nil
-}
-
-func ipPortraitReferer(ip string) string {
-	values := url.Values{}
-	values.Set("activeKey", "SEARCH_IP")
-	values.Set("trace", "apistore_ip_aladdin")
-	values.Set("activeId", "SEARCH_IP_ADDRESS")
-	values.Set("ip", ip)
-	return "https://qifu.baidu.com/?" + values.Encode()
-}
-
-func ipPortraitIsLocal(value string) bool {
-	parsed := net.ParseIP(value)
-	if parsed == nil {
-		return false
-	}
-	return parsed.IsLoopback() || parsed.IsPrivate() || parsed.IsUnspecified()
-}
-
-func ipPortraitIndicatesPrefetch(payload ipPortraitBriefResponse) bool {
-	texts := []string{
-		payload.Data.Scene,
-		payload.Data.Company,
-		payload.Data.RiskScore,
-	}
-	for group, items := range payload.Data.SecurityRisks {
-		texts = append(texts, group)
-		for _, item := range items {
-			texts = append(texts, item.Label)
-			texts = append(texts, item.SubItems...)
-		}
-	}
-	if containsAnyRiskText(texts, "机房", "idc", "数据中心", "云主机", "云服务", "cdn", "代理", "vpn", "服务器", "托管", "劫持", "非正常设备", "黑rom") {
-		return true
-	}
-	return strings.EqualFold(strings.TrimSpace(payload.Data.RiskScore), "高") && payload.Data.HitRiskNum > 0
-}
-
-func ipPortraitSummary(payload ipPortraitBriefResponse) string {
-	parts := []string{}
-	if value := strings.TrimSpace(payload.Data.RiskScore); value != "" {
-		parts = append(parts, "风险"+value)
-	}
-	if value := strings.TrimSpace(payload.Data.Scene); value != "" {
-		parts = append(parts, value)
-	}
-	if value := strings.TrimSpace(payload.Data.Company); value != "" {
-		parts = append(parts, value)
-	}
-	labels := []string{}
-	for _, items := range payload.Data.SecurityRisks {
-		for _, item := range items {
-			if label := strings.TrimSpace(item.Label); label != "" {
-				labels = append(labels, label)
-			}
-			for _, subItem := range item.SubItems {
-				if label := strings.TrimSpace(subItem); label != "" {
-					labels = append(labels, label)
-				}
-			}
-		}
-	}
-	parts = append(parts, uniqueStrings(labels)...)
-	return strings.Join(uniqueStrings(parts), " / ")
-}
-
-func uniqueStrings(values []string) []string {
-	seen := map[string]bool{}
-	result := []string{}
-	for _, value := range values {
-		if value == "" || seen[value] {
-			continue
-		}
-		seen[value] = true
-		result = append(result, value)
-	}
-	return result
+	return isPrefetch, ipRisk
 }
 
 func containsAnyRiskText(values []string, needles ...string) bool {

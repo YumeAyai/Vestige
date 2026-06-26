@@ -55,6 +55,7 @@ type tcbEventDoc struct {
 	Referer        string `json:"referer"`
 	AcceptLanguage string `json:"accept_language"`
 	ForwardedFor   string `json:"forwarded_for"`
+	IPRisk         string `json:"ip_risk"`
 	RawPayload     string `json:"raw_payload"`
 	TriggeredAt    string `json:"triggered_at"`
 }
@@ -219,6 +220,7 @@ func (s *TCBStore) RecordEvent(ctx context.Context, event model.Event) (int64, e
 		Referer:        event.Referer,
 		AcceptLanguage: event.AcceptLanguage,
 		ForwardedFor:   event.ForwardedFor,
+		IPRisk:         event.IPRisk,
 		RawPayload:     string(raw),
 		TriggeredAt:    event.TriggeredAt,
 	}
@@ -233,6 +235,23 @@ func (s *TCBStore) RecordEvent(ctx context.Context, event model.Event) (int64, e
 		return 0, err
 	}
 	return id, nil
+}
+
+func (s *TCBStore) UpdateEventIPRisk(ctx context.Context, id int64, ipRisk string) error {
+	ipRisk = strings.TrimSpace(ipRisk)
+	if id <= 0 || ipRisk == "" {
+		return nil
+	}
+	_, err := s.runCommand(ctx, s.events, "COMMAND", updateCommandBody{
+		Update: s.events,
+		Updates: []updateCommandItem{
+			{
+				Query:  map[string]any{"id": id},
+				Update: map[string]any{"$set": map[string]any{"ip_risk": ipRisk}},
+			},
+		},
+	})
+	return err
 }
 
 func (s *TCBStore) ListEvents(ctx context.Context, filter model.EventFilter) ([]model.Event, error) {
@@ -621,6 +640,7 @@ func eventFromTCBDoc(doc tcbEventDoc) model.Event {
 		Referer:        doc.Referer,
 		AcceptLanguage: doc.AcceptLanguage,
 		ForwardedFor:   doc.ForwardedFor,
+		IPRisk:         doc.IPRisk,
 	}
 }
 

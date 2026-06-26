@@ -140,6 +140,38 @@ func TestTCBStoreRecordEventPreservesNanosecondID(t *testing.T) {
 	}
 }
 
+func TestTCBStoreUpdateEventIPRisk(t *testing.T) {
+	client := &fakeRunCommandsClient{results: []string{`{"ok":1}`}}
+	store := NewTCBStoreWithClient(client, TCBConfig{EnvID: "env-1", EventsCollection: "tracking_events"})
+
+	err := store.UpdateEventIPRisk(context.Background(), 123, "风险高 / 家庭宽带 / 代理IP")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("expected one update command, got %d", len(client.requests))
+	}
+	command := client.requests[0].MgoCommands[0]
+	if *command.TableName != "tracking_events" {
+		t.Fatalf("unexpected table: %s", *command.TableName)
+	}
+	var body updateCommandBody
+	if err := json.Unmarshal([]byte(*command.Command), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Update != "tracking_events" || len(body.Updates) != 1 {
+		t.Fatalf("unexpected update body: %#v", body)
+	}
+	update := body.Updates[0]
+	if intValue(update.Query["id"]) != 123 {
+		t.Fatalf("unexpected update query: %#v", update.Query)
+	}
+	set := update.Update["$set"].(map[string]any)
+	if set["ip_risk"] != "风险高 / 家庭宽带 / 代理IP" {
+		t.Fatalf("unexpected set body: %#v", set)
+	}
+}
+
 func TestTCBStoreRecordEventUpdatesCounters(t *testing.T) {
 	client := &fakeRunCommandsClient{results: []string{`{"ok":1}`, `{"ok":1}`}}
 	store := NewTCBStoreWithClient(client, TCBConfig{EnvID: "env-1", EventsCollection: "tracking_events", CountersCollection: "custom_counters"})

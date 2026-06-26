@@ -20,6 +20,7 @@ type Event struct {
 	Referer        string `json:"referer,omitempty"`
 	AcceptLanguage string `json:"accept_language,omitempty"`
 	ForwardedFor   string `json:"forwarded_for,omitempty"`
+	IPRisk         string `json:"ip_risk,omitempty"`
 }
 
 type EventFilter struct {

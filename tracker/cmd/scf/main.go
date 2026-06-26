@@ -61,6 +61,7 @@ func initHandler(ctx context.Context) error {
 
 	h = handler.NewHandler(tcbStore)
 	h.PublicBaseURL = cfg.Client.TrackingBaseURL
+	h.IPPortraitURL = cfg.Client.IPPortraitURL
 	hErr = nil
 	log.Println("tracker scf initialized")
 	return nil

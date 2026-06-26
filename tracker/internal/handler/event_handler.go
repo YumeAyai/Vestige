@@ -25,6 +25,8 @@ type Handler struct {
 	Store         store.Store
 	Now           func() time.Time
 	PublicBaseURL string
+	IPPortraitURL string
+	IPHTTPClient  *http.Client
 }
 
 var serviceVersion = "event-dev"
@@ -154,7 +156,10 @@ func (h *Handler) recordImageEvent(ctx context.Context, event model.SCFEvent, qu
 	if evt.Token == "" && evt.Campaign == "" {
 		return nil
 	}
-	_, err := h.Store.RecordEvent(ctx, evt)
+	id, err := h.Store.RecordEvent(ctx, evt)
+	if err == nil {
+		h.queueIPPortraitLookup(id, evt.IP)
+	}
 	return err
 }
 
@@ -272,7 +277,10 @@ func (h *Handler) record(ctx context.Context, event model.SCFEvent, kind string)
 	if evt.Token == "" && evt.Campaign == "" {
 		return nil
 	}
-	_, err := h.Store.RecordEvent(ctx, evt)
+	id, err := h.Store.RecordEvent(ctx, evt)
+	if err == nil {
+		h.queueIPPortraitLookup(id, evt.IP)
+	}
 	return err
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"strings"
@@ -36,6 +37,18 @@ func (s *memoryStore) RecordEvent(_ context.Context, event model.Event) (int64, 
 	return event.ID, nil
 }
 
+func (s *memoryStore) UpdateEventIPRisk(_ context.Context, id int64, ipRisk string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.events {
+		if s.events[index].ID == id {
+			s.events[index].IPRisk = ipRisk
+			return nil
+		}
+	}
+	return nil
+}
+
 func (s *memoryStore) ListEvents(_ context.Context, filter model.EventFilter) ([]model.Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -59,6 +72,12 @@ func (s *memoryStore) ListEvents(_ context.Context, filter model.EventFilter) ([
 		}
 	}
 	return items, nil
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
 }
 
 func (s *memoryStore) Stats(ctx context.Context, filter model.EventFilter) (model.StatsResult, error) {
@@ -400,5 +419,56 @@ func TestEventFromRequestSanitizesScalars(t *testing.T) {
 	event := eventFromRequest(query, model.SCFEvent{}, "open", time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC))
 	if event.Source != "tenantx" || event.Token != "token" {
 		t.Fatalf("unexpected event: %#v", event)
+	}
+}
+
+func TestIPPortraitLookupUsesBaiduRefererAndSummarizes(t *testing.T) {
+	h := NewHandler(newMemoryStore())
+	h.IPHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != "https://qifu.baidu.com/api/v1/ip-portrait/brief-info?ip=183.193.43.145" {
+			t.Fatalf("unexpected query url: %s", req.URL.String())
+		}
+		referer := req.Header.Get("Referer")
+		if !strings.Contains(referer, "activeKey=SEARCH_IP") || !strings.Contains(referer, "activeId=SEARCH_IP_ADDRESS") || !strings.Contains(referer, "ip=183.193.43.145") {
+			t.Fatalf("unexpected referer: %s", referer)
+		}
+		body := strings.NewReader(`{
+			"code": 200,
+			"data": {
+				"country": "中国",
+				"province": "上海市",
+				"isp": "中国移动",
+				"scene": "家庭宽带",
+				"company": null,
+				"risk_score": "高",
+				"security_risks": {
+					"行为风险": [
+						{"label": "劫持代理IP", "subItems": ["劫持代理IP"]},
+						{"label": "代理IP", "subItems": ["代理IP"]}
+					],
+					"关联设备风险": [
+						{"label": "非正常设备IP", "subItems": ["疑似黑ROM设备IP"]}
+					]
+				},
+				"hit_risk_num": 3,
+				"query_ip": "183.193.43.145",
+				"version": "v4"
+			},
+			"message": "success"
+		}`)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(body),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	summary := h.lookupIPPortrait(context.Background(), "183.193.43.145")
+	for _, want := range []string{"风险高", "家庭宽带", "劫持代理IP", "代理IP", "疑似黑ROM设备IP"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q: %s", want, summary)
+		}
 	}
 }
