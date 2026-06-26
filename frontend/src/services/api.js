@@ -20,6 +20,7 @@ export const api = {
   contacts: () => request('/api/contacts'),
   contactsPage: ({ limit = 20, offset = 0, q = '' } = {}) => request(`/api/contacts/page?limit=${encodeURIComponent(limit)}&offset=${offset}&q=${encodeURIComponent(q)}`),
   createContact: (data) => request('/api/contacts', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
+  updateContact: (id, data) => request(`/api/contacts/${id}`, { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(data) }),
   updateContactsBatch: (data) => request('/api/contacts/batch', { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(data) }),
   deleteContactsBatch: (ids) => request('/api/contacts/batch', { method: 'DELETE', headers: jsonHeaders, body: JSON.stringify({ ids }) }),
   importContacts: async (file) => {

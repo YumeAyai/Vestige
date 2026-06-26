@@ -13,6 +13,7 @@ const pageSize = ref('20')
 const pageSizeOptions = [20, 50, 100, 200, 'all']
 const query = ref('')
 const selectedIds = ref([])
+const editingId = ref(null)
 const batch = reactive({ tags: '', notes: '' })
 const notice = ref('')
 const form = reactive({ name: '', email: '', company: '', department: '', phone: '', tags: '', notes: '' })
@@ -24,6 +25,7 @@ const columns = reactive([
   { key: 'phone', label: '联系电话', width: 150, min: 130 },
   { key: 'tags', label: '标签', width: 150, min: 120 },
   { key: 'notes', label: '备注', width: 240, min: 180 },
+  { key: 'actions', label: '操作', width: 110, min: 96 },
 ])
 
 let resizeState = null
@@ -66,12 +68,37 @@ function filterContacts(list) {
 }
 
 async function save() {
-  await api.createContact({
+  const payload = {
     ...form,
     name: form.name || form.company || form.email,
-  })
-  Object.assign(form, { name: '', email: '', company: '', department: '', phone: '', tags: '', notes: '' })
+  }
+  if (editingId.value) {
+    await api.updateContact(editingId.value, payload)
+    notice.value = '联系人已更新'
+  } else {
+    await api.createContact(payload)
+    notice.value = '联系人已新增'
+  }
+  resetForm()
   await load()
+}
+
+function resetForm() {
+  editingId.value = null
+  Object.assign(form, { name: '', email: '', company: '', department: '', phone: '', tags: '', notes: '' })
+}
+
+function editContact(item) {
+  editingId.value = item.id
+  Object.assign(form, {
+    name: item.name || '',
+    email: item.email || '',
+    company: item.company || '',
+    department: item.department || '',
+    phone: item.phone || '',
+    tags: item.tags || '',
+    notes: item.notes || '',
+  })
 }
 
 async function upload(event) {
@@ -216,12 +243,13 @@ onMounted(load)
     </div>
     <form class="panel grid five contact-form" @submit.prevent="save">
       <label>姓名<input v-model="form.name" /></label>
-      <label>公司名称<input v-model="form.company" required /></label>
+      <label>公司名称<input v-model="form.company" /></label>
       <label>邮箱<input v-model="form.email" required /></label>
       <label>手机号<input v-model="form.phone" /></label>
       <label>标签<input v-model="form.tags" /></label>
       <label>备注<input v-model="form.notes" /></label>
-      <button class="contact-submit">新增联系人</button>
+      <button class="contact-submit">{{ editingId ? '保存联系人' : '新增联系人' }}</button>
+      <button v-if="editingId" type="button" class="secondary contact-cancel" @click="resetForm">取消编辑</button>
     </form>
     <div class="panel contact-grid-card">
       <div class="bulk-bar">
@@ -273,6 +301,11 @@ onMounted(load)
               </td>
               <td>{{ item.tags }}</td>
               <td class="notes-cell">{{ item.notes }}</td>
+              <td>
+                <div class="table-actions">
+                  <button type="button" class="secondary" @click="editContact(item)">编辑</button>
+                </div>
+              </td>
             </tr>
           </tbody>
         </table>

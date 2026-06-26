@@ -65,6 +65,7 @@ func NewWithConfig(db *sql.DB, frontend fs.FS, cfg config.Config) *gin.Engine {
 	api.GET("/contacts", s.listContacts)
 	api.GET("/contacts/page", s.pageContacts)
 	api.POST("/contacts", s.createContact)
+	api.PATCH("/contacts/:id", s.updateContact)
 	api.PATCH("/contacts/batch", s.updateContactsBatch)
 	api.DELETE("/contacts/batch", s.deleteContactsBatch)
 	api.POST("/contacts/import", s.importContacts)
@@ -294,6 +295,39 @@ func (s *Server) createContact(c *gin.Context) {
 	}
 	input.ID, _ = res.LastInsertId()
 	c.JSON(http.StatusCreated, input)
+}
+
+func (s *Server) updateContact(c *gin.Context) {
+	var input models.Contact
+	if bind(c, &input) != nil {
+		return
+	}
+	id, _ := strconv.ParseInt(c.Param("id"), 10, 64)
+	if id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "联系人不存在"})
+		return
+	}
+	input.Email = mailer.NormalizeEmailList(input.Email)
+	if err := mailer.ValidateEmailList(input.Email, "邮箱"); err != nil {
+		fail(c, err)
+		return
+	}
+	if input.Name == "" {
+		input.Name = firstNonEmpty(input.Company, input.Email)
+	}
+	res, err := s.db.Exec(`UPDATE contacts SET name=?,email=?,company=?,department=?,phone=?,tags=?,notes=? WHERE id=?`,
+		input.Name, input.Email, input.Company, input.Department, input.Phone, input.Tags, input.Notes, id)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+		return
+	}
+	input.ID = id
+	c.JSON(http.StatusOK, input)
 }
 
 type contactBatchInput struct {
