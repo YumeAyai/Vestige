@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"testing"
 
@@ -218,6 +219,13 @@ func TestCloudOpenFromRiskyIPPortraitIsPrefetch(t *testing.T) {
 	ipPortraitHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		if got := req.URL.Query().Get("ip"); got != "121.32.180.28" {
 			t.Fatalf("expected queried ip, got %q", got)
+		}
+		referer, err := url.Parse(req.Header.Get("Referer"))
+		if err != nil {
+			t.Fatalf("invalid referer: %v", err)
+		}
+		if referer.Host != "qifu.baidu.com" || referer.Query().Get("activeKey") != "SEARCH_IP" || referer.Query().Get("ip") != "121.32.180.28" {
+			t.Fatalf("unexpected referer: %s", req.Header.Get("Referer"))
 		}
 		body := bytes.NewBufferString(`{
 			"code": 200,

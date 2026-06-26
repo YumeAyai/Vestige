@@ -1709,6 +1709,7 @@ func (s *Server) ipPortraitLooksLikePrefetch(ip string) bool {
 	if err != nil {
 		return false
 	}
+	req.Header.Set("Referer", ipPortraitReferer(ip))
 	res, err := ipPortraitHTTPClient.Do(req)
 	if err != nil {
 		return false
@@ -1735,6 +1736,15 @@ func ipPortraitURL(endpoint, ip string) (string, error) {
 	values.Set("ip", ip)
 	parsed.RawQuery = values.Encode()
 	return parsed.String(), nil
+}
+
+func ipPortraitReferer(ip string) string {
+	values := url.Values{}
+	values.Set("activeKey", "SEARCH_IP")
+	values.Set("trace", "apistore_ip_aladdin")
+	values.Set("activeId", "SEARCH_IP_ADDRESS")
+	values.Set("ip", ip)
+	return "https://qifu.baidu.com/?" + values.Encode()
 }
 
 func ipPortraitIsLocal(value string) bool {
