@@ -117,3 +117,9 @@ func TestHourlyTrendUsesLocalTimezone(t *testing.T) {
 		t.Fatalf("expected local +08:00 buckets, got %#v", trend)
 	}
 }
+
+func TestTimezoneDataIncludesShanghai(t *testing.T) {
+	if _, err := time.LoadLocation("Asia/Shanghai"); err != nil {
+		t.Fatalf("expected embedded timezone data to include Asia/Shanghai: %v", err)
+	}
+}

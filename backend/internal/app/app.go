@@ -22,6 +22,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	_ "time/tzdata"
 
 	"Vestige/backend/internal/mailer"
 	"Vestige/pkg/config"
