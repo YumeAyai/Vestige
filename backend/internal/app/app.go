@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1010,28 +1011,8 @@ func (s *Server) campaignStats(c *gin.Context) {
 		)`, id).
 		Scan(&stats.Total, &stats.Sent, &stats.Failed, &stats.Pending, &stats.Waiting, &stats.Opened, &stats.Unopened, &stats.QRLoaded, &stats.QRLoadEvents, &stats.QRNotLoaded, &stats.PrefetchEvents, &stats.Clicked, &stats.ClickEvents)
 
-	rows, _ := s.db.Query(`SELECT strftime('%Y-%m-%d %H:00', opened_at) hour, COUNT(*) FROM open_events oe JOIN campaign_recipients cr ON cr.id=oe.campaign_recipient_id WHERE cr.campaign_id=? GROUP BY hour ORDER BY hour`, id)
-	defer closeRows(rows)
-	trend := []gin.H{}
-	if rows != nil {
-		for rows.Next() {
-			var hour string
-			var count int
-			_ = rows.Scan(&hour, &count)
-			trend = append(trend, gin.H{"hour": hour, "count": count})
-		}
-	}
-	qrRows, _ := s.db.Query(`SELECT strftime('%Y-%m-%d %H:00', tme.triggered_at) hour, COUNT(*) FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id WHERE cr.campaign_id=? AND tme.kind='image' GROUP BY hour ORDER BY hour`, id)
-	defer closeRows(qrRows)
-	qrTrend := []gin.H{}
-	if qrRows != nil {
-		for qrRows.Next() {
-			var hour string
-			var count int
-			_ = qrRows.Scan(&hour, &count)
-			qrTrend = append(qrTrend, gin.H{"hour": hour, "count": count})
-		}
-	}
+	trend := s.hourlyTrend(`SELECT opened_at FROM open_events oe JOIN campaign_recipients cr ON cr.id=oe.campaign_recipient_id WHERE cr.campaign_id=?`, id)
+	qrTrend := s.hourlyTrend(`SELECT tme.triggered_at FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id WHERE cr.campaign_id=? AND tme.kind='image'`, id)
 	c.JSON(http.StatusOK, gin.H{"summary": stats, "trend": trend, "qr_trend": qrTrend})
 }
 
@@ -2259,26 +2240,48 @@ func (s *Server) linkStats(c *gin.Context) {
 		WHERE cr.campaign_id=? AND tm.id=? AND tme.kind='click'`, campaignID, linkID).
 		Scan(&stats.TotalClicks, &stats.UniqueClicks)
 
-	rows, _ := s.db.Query(`
-		SELECT strftime('%Y-%m-%d %H:00', tme.triggered_at) hour, COUNT(*)
+	trend := s.hourlyTrend(`
+		SELECT tme.triggered_at
 		FROM tracking_mark_events tme
 		JOIN tracking_marks tm ON tm.id=tme.mark_id
 		JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id
-		WHERE cr.campaign_id=? AND tm.id=? AND tme.kind='click'
-		GROUP BY hour
-		ORDER BY hour`, campaignID, linkID)
-	defer closeRows(rows)
-	trend := []gin.H{}
-	if rows != nil {
-		for rows.Next() {
-			var hour string
-			var count int
-			_ = rows.Scan(&hour, &count)
-			trend = append(trend, gin.H{"hour": hour, "count": count})
-		}
-	}
+		WHERE cr.campaign_id=? AND tm.id=? AND tme.kind='click'`, campaignID, linkID)
 
 	c.JSON(http.StatusOK, gin.H{"summary": stats, "trend": trend})
+}
+
+func (s *Server) hourlyTrend(query string, args ...any) []gin.H {
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return []gin.H{}
+	}
+	defer rows.Close()
+	counts := map[time.Time]int{}
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			continue
+		}
+		eventAt, ok := tracker.ParseEventTime(value)
+		if !ok {
+			continue
+		}
+		hour := eventAt.Local().Truncate(time.Hour)
+		counts[hour]++
+	}
+	hours := make([]time.Time, 0, len(counts))
+	for hour := range counts {
+		hours = append(hours, hour)
+	}
+	sort.Slice(hours, func(i, j int) bool { return hours[i].Before(hours[j]) })
+	trend := make([]gin.H, 0, len(hours))
+	for _, hour := range hours {
+		trend = append(trend, gin.H{
+			"hour":  hour.Format(time.RFC3339),
+			"count": counts[hour],
+		})
+	}
+	return trend
 }
 
 func safeRate(count, total int) float64 {

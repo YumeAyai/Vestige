@@ -1,13 +1,16 @@
 package app
 
 import (
+	"database/sql"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"Vestige/pkg/config"
 
 	"github.com/gin-gonic/gin"
+	_ "modernc.org/sqlite"
 )
 
 func TestReadContactsCSVWithoutHeaderUsesFallbackColumns(t *testing.T) {
@@ -91,5 +94,26 @@ func TestCompactNotesIncludesNonEmptyFields(t *testing.T) {
 	}
 	if strings.Contains(got, "数据来源") {
 		t.Fatalf("empty fields should be omitted: %s", got)
+	}
+}
+
+func TestHourlyTrendUsesLocalTimezone(t *testing.T) {
+	previousLocal := time.Local
+	time.Local = time.FixedZone("CST", 8*60*60)
+	t.Cleanup(func() { time.Local = previousLocal })
+
+	conn, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	server := &Server{db: conn}
+	trend := server.hourlyTrend(`SELECT ? UNION ALL SELECT ?`, "2026-06-09T16:30:00Z", "2026-06-09T17:10:00Z")
+	if len(trend) != 2 {
+		t.Fatalf("expected 2 hourly buckets, got %#v", trend)
+	}
+	if trend[0]["hour"] != "2026-06-10T00:00:00+08:00" || trend[1]["hour"] != "2026-06-10T01:00:00+08:00" {
+		t.Fatalf("expected local +08:00 buckets, got %#v", trend)
 	}
 }

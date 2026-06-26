@@ -23,3 +23,9 @@ export function formatDate(value) {
   if (!date) return value ? String(value) : '-'
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
+
+export function formatLocalHour(value) {
+  const date = parseDateTime(value)
+  if (!date) return value ? String(value) : '-'
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:00`
+}

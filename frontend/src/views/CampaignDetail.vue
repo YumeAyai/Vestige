@@ -3,7 +3,7 @@ import * as echarts from 'echarts'
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../services/api'
-import { formatDateTime } from '../utils/time'
+import { formatDateTime, formatLocalHour } from '../utils/time'
 import { askConfirm } from '../utils/dialog'
 
 const route = useRoute()
@@ -334,6 +334,7 @@ function renderEngagementTrend() {
   const pixelByHour = new Map((stats.value.trend || []).map((item) => [item.hour, item.count]))
   const imageByHour = new Map((stats.value.qr_trend || []).map((item) => [item.hour, item.count]))
   const clickByHour = new Map((linkEngagement.value.trend || []).map((item) => [item.hour, item.count]))
+  const hourLabels = hours.map(formatLocalHour)
   chart.setOption({
     color: ['#087f8c', '#3157a4', '#a16207'],
     grid: { left: 36, right: 18, top: 32, bottom: 42 },
@@ -341,7 +342,7 @@ function renderEngagementTrend() {
     legend: { top: 0, right: 8, textStyle: { color: '#667085' } },
     xAxis: {
       type: 'category',
-      data: hours,
+      data: hourLabels,
       axisLine: { lineStyle: { color: '#d9dee8' } },
       axisLabel: { color: '#667085', rotate: 35 },
     },
@@ -363,6 +364,7 @@ function renderImageChart() {
   if (!imageChartEl.value) return
   const chart = echarts.init(imageChartEl.value)
   const hours = stats.value.qr_trend?.map((item) => item.hour) || []
+  const hourLabels = hours.map(formatLocalHour)
   const data = stats.value.qr_trend?.map((item) => item.count) || []
   chart.setOption({
     color: ['#3157a4'],
@@ -370,7 +372,7 @@ function renderImageChart() {
     tooltip: { trigger: 'axis' },
     xAxis: {
       type: 'category',
-      data: hours,
+      data: hourLabels,
       axisLine: { lineStyle: { color: '#d9dee8' } },
       axisLabel: { color: '#667085', rotate: 45 },
     },
