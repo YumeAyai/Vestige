@@ -28,6 +28,11 @@ export const api = {
     form.append('file', file)
     return request('/api/contacts/import', { method: 'POST', body: form })
   },
+  importContactsPath: (path) => request('/api/contacts/import', {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify({ path }),
+  }),
   templates: () => request('/api/templates'),
   createTemplate: (data) => request('/api/templates', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
   updateTemplate: (id, data) => request(`/api/templates/${id}`, { method: 'PATCH', headers: jsonHeaders, body: JSON.stringify(data) }),

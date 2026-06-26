@@ -3,10 +3,12 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../services/api'
 import { askConfirm } from '../utils/dialog'
+import { ImportContactsFromFileDialog } from '../../wailsjs/go/main/DesktopApp'
 
 const router = useRouter()
 const items = ref([])
 const importing = ref(false)
+const fileInput = ref(null)
 const total = ref(0)
 const offset = ref(0)
 const pageSize = ref('20')
@@ -104,14 +106,40 @@ function editContact(item) {
 async function upload(event) {
   const file = event.target.files?.[0]
   if (!file) return
+  await importSelectedFile(file)
+  event.target.value = ''
+}
+
+async function importSelectedFile(file) {
   importing.value = true
   try {
-    await api.importContacts(file)
+    const result = await api.importContacts(file)
+    notice.value = `已导入 ${result.imported} 个联系人；跳过 ${result.skipped} 个`
     offset.value = 0
     await load()
   } finally {
     importing.value = false
-    event.target.value = ''
+  }
+}
+
+async function chooseImportFile() {
+  if (importing.value) return
+  if (!window.go?.main?.DesktopApp?.ImportContactsFromFileDialog) {
+    fileInput.value?.click()
+    return
+  }
+
+  importing.value = true
+  try {
+    const result = await ImportContactsFromFileDialog()
+    if (!result.imported && !result.skipped) return
+    notice.value = `已导入 ${result.imported} 个联系人；跳过 ${result.skipped} 个`
+    offset.value = 0
+    await load()
+  } catch (error) {
+    notice.value = error.message || String(error)
+  } finally {
+    importing.value = false
   }
 }
 
@@ -231,10 +259,10 @@ onMounted(load)
         <h1>联系人</h1>
         <p class="muted">支持导入 xlsx / csv；会自动识别“公司名、邮箱、联系电话、官网、行业、规模”等字段。</p>
       </div>
-      <label class="button secondary">
+      <button class="secondary" type="button" :disabled="importing" @click="chooseImportFile">
         导入名单
-        <input type="file" accept=".xlsx,.csv" style="display:none" :disabled="importing" @change="upload" />
-      </label>
+      </button>
+      <input ref="fileInput" type="file" accept=".xlsx,.csv" style="display:none" :disabled="importing" @change="upload" />
     </div>
     <div class="contact-actions">
       <input v-model="query" placeholder="搜索姓名、公司、邮箱、电话、标签或备注" @keydown.enter.prevent="search" />

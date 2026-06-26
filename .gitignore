@@ -3,6 +3,8 @@ node_modules/
 .cache/
 data/
 dist/
+!backend/internal/webui/dist/
+!backend/internal/webui/dist/**
 *.db
 *.db-shm
 *.db-wal

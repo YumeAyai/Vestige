@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -282,6 +283,17 @@ func (s *Server) pageContacts(c *gin.Context) {
 	})
 }
 
+type importContactsInput struct {
+	Filename string `json:"filename"`
+	Data     string `json:"data"`
+	Path     string `json:"path"`
+}
+
+type ContactImportResult struct {
+	Imported int `json:"imported"`
+	Skipped  int `json:"skipped"`
+}
+
 func (s *Server) createContact(c *gin.Context) {
 	var input models.Contact
 	if bind(c, &input) != nil {
@@ -390,6 +402,11 @@ func (s *Server) deleteContactsBatch(c *gin.Context) {
 }
 
 func (s *Server) importContacts(c *gin.Context) {
+	if strings.Contains(strings.ToLower(c.GetHeader("Content-Type")), "application/json") {
+		s.importContactsJSON(c)
+		return
+	}
+
 	file, err := c.FormFile("file")
 	if err != nil {
 		fail(c, err)
@@ -408,19 +425,64 @@ func (s *Server) importContacts(c *gin.Context) {
 		return
 	}
 
-	ext := strings.ToLower(filepath.Ext(file.Filename))
+	s.importContactsBytes(c, file.Filename, buf.Bytes())
+}
+
+func (s *Server) importContactsJSON(c *gin.Context) {
+	var input importContactsInput
+	if bind(c, &input) != nil {
+		return
+	}
+
+	if strings.TrimSpace(input.Path) != "" {
+		data, err := os.ReadFile(input.Path)
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		s.importContactsBytes(c, input.Path, data)
+		return
+	}
+
+	data, err := base64.StdEncoding.DecodeString(input.Data)
+	if err != nil {
+		fail(c, errors.New("联系人文件内容无效"))
+		return
+	}
+	s.importContactsBytes(c, input.Filename, data)
+}
+
+func (s *Server) importContactsBytes(c *gin.Context, filename string, data []byte) {
+	result, err := ImportContactsData(s.db, filename, data)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, result)
+}
+
+func ImportContactsFromPath(conn *sql.DB, path string) (ContactImportResult, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ContactImportResult{}, err
+	}
+	return ImportContactsData(conn, path, data)
+}
+
+func ImportContactsData(conn *sql.DB, filename string, data []byte) (ContactImportResult, error) {
+	ext := strings.ToLower(filepath.Ext(filename))
 	var contacts []models.Contact
+	var err error
 	switch ext {
 	case ".xlsx":
-		contacts, err = readContactsXLSX(buf.Bytes())
+		contacts, err = readContactsXLSX(data)
 	case ".csv":
-		contacts, err = readContactsCSV(buf.Bytes())
+		contacts, err = readContactsCSV(data)
 	default:
 		err = errors.New("仅支持 .xlsx 或 .csv 联系人文件")
 	}
 	if err != nil {
-		fail(c, err)
-		return
+		return ContactImportResult{}, err
 	}
 
 	imported, skipped := 0, 0
@@ -436,11 +498,10 @@ func (s *Server) importContacts(c *gin.Context) {
 		if contact.Name == "" {
 			contact.Name = contact.Email
 		}
-		res, err := s.db.Exec(`INSERT OR IGNORE INTO contacts(name,email,company,department,phone,tags,notes) VALUES(?,?,?,?,?,?,?)`,
+		res, err := conn.Exec(`INSERT OR IGNORE INTO contacts(name,email,company,department,phone,tags,notes) VALUES(?,?,?,?,?,?,?)`,
 			contact.Name, contact.Email, contact.Company, contact.Department, contact.Phone, contact.Tags, contact.Notes)
 		if err != nil {
-			fail(c, err)
-			return
+			return ContactImportResult{}, err
 		}
 		affected, _ := res.RowsAffected()
 		if affected > 0 {
@@ -449,7 +510,7 @@ func (s *Server) importContacts(c *gin.Context) {
 			skipped++
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{"imported": imported, "skipped": skipped})
+	return ContactImportResult{Imported: imported, Skipped: skipped}, nil
 }
 
 func (s *Server) listTemplates(c *gin.Context) {

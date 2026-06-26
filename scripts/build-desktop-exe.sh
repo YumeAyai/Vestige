@@ -6,6 +6,7 @@ OUT="$ROOT/dist/desktop-exe"
 VERSION="${VESTIGE_VERSION:-0.1.0}"
 
 export GOCACHE="${GOCACHE:-$ROOT/.cache/go-build}"
+export CLIENT_DB_PATH="${CLIENT_DB_PATH:-$ROOT/.cache/wails-bindings/app.db}"
 
 mkdir -p "$OUT"
 
@@ -18,7 +19,6 @@ printf 'Building Windows desktop exe...\n'
 		-platform windows/amd64 \
 		-s \
 		-m \
-		-skipbindings \
 		-skipembedcreate \
 		-nopackage \
 		-ldflags "-X Vestige/pkg/config.BuildVersion=$VERSION")
