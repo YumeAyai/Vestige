@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"mime"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -37,9 +38,11 @@ type Server struct {
 	cfg              config.Config
 	sendingCampaigns sync.Map
 	cloudSyncMu      sync.Mutex
+	ipPortraitCache  sync.Map
 }
 
 var cloudHTTPClient = &http.Client{Timeout: 2500 * time.Millisecond}
+var ipPortraitHTTPClient = &http.Client{Timeout: 1200 * time.Millisecond}
 
 func New(db *sql.DB, frontend fs.FS) *gin.Engine {
 	return NewWithConfig(db, frontend, config.MustLoadDefault())
@@ -1562,7 +1565,7 @@ func (s *Server) recordCloudOpenEvent(event cloudTrackingEventInput, _ string) e
 	if parsed, ok := tracker.ParseEventTime(triggeredAt); ok {
 		eventAt = parsed
 	}
-	isPrefetch := tracker.LooksLikePrefetch(event.UserAgent) || tracker.LooksLikeDeliverySecurityScan(sentAt, eventAt)
+	isPrefetch := s.cloudEventLooksLikePrefetch(event, sentAt, eventAt)
 	if triggeredAt == "" {
 		_, err := s.db.Exec(
 			`INSERT INTO open_events(campaign_recipient_id,tracking_id,event_index,ip,user_agent,is_prefetch) VALUES(?,?,?,?,?,?)`,
@@ -1625,7 +1628,7 @@ func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string)
 	if parsed, ok := tracker.ParseEventTime(triggeredAt); ok {
 		eventAt = parsed
 	}
-	isPrefetch := tracker.LooksLikePrefetch(event.UserAgent) || tracker.LooksLikeDeliverySecurityScan(sentAt, eventAt)
+	isPrefetch := s.cloudEventLooksLikePrefetch(event, sentAt, eventAt)
 	if triggeredAt == "" {
 		_, err := s.db.Exec(
 			`INSERT INTO tracking_mark_events(mark_id,token,kind,event_index,source,ip,user_agent,referer,accept_language,forwarded_for,is_prefetch,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?,?)`,
@@ -1661,6 +1664,116 @@ func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string)
 		triggeredAt,
 	)
 	return err
+}
+
+func (s *Server) cloudEventLooksLikePrefetch(event cloudTrackingEventInput, sentAt string, eventAt time.Time) bool {
+	return tracker.LooksLikePrefetch(event.UserAgent) ||
+		tracker.LooksLikeDeliverySecurityScan(sentAt, eventAt) ||
+		s.ipPortraitLooksLikePrefetch(event.IP)
+}
+
+type ipPortraitBriefResponse struct {
+	Code int `json:"code"`
+	Data struct {
+		Scene         string                              `json:"scene"`
+		Company       string                              `json:"company"`
+		RiskScore     string                              `json:"risk_score"`
+		SecurityRisks map[string][]ipPortraitRiskCategory `json:"security_risks"`
+		HitRiskNum    int                                 `json:"hit_risk_num"`
+	} `json:"data"`
+}
+
+type ipPortraitRiskCategory struct {
+	Label    string   `json:"label"`
+	SubItems []string `json:"subItems"`
+}
+
+func (s *Server) ipPortraitLooksLikePrefetch(ip string) bool {
+	ip = strings.TrimSpace(ip)
+	if ip == "" || ipPortraitIsLocal(ip) {
+		return false
+	}
+	endpoint := strings.TrimSpace(s.cfg.Client.IPPortraitURL)
+	if endpoint == "" {
+		return false
+	}
+	if cached, ok := s.ipPortraitCache.Load(ip); ok {
+		result, _ := cached.(bool)
+		return result
+	}
+	requestURL, err := ipPortraitURL(endpoint, ip)
+	if err != nil {
+		return false
+	}
+	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+	if err != nil {
+		return false
+	}
+	res, err := ipPortraitHTTPClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return false
+	}
+	var payload ipPortraitBriefResponse
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil || payload.Code != http.StatusOK {
+		return false
+	}
+	result := ipPortraitIndicatesPrefetch(payload)
+	s.ipPortraitCache.Store(ip, result)
+	return result
+}
+
+func ipPortraitURL(endpoint, ip string) (string, error) {
+	parsed, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil {
+		return "", err
+	}
+	values := parsed.Query()
+	values.Set("ip", ip)
+	parsed.RawQuery = values.Encode()
+	return parsed.String(), nil
+}
+
+func ipPortraitIsLocal(value string) bool {
+	parsed := net.ParseIP(value)
+	if parsed == nil {
+		return false
+	}
+	return parsed.IsLoopback() || parsed.IsPrivate() || parsed.IsUnspecified()
+}
+
+func ipPortraitIndicatesPrefetch(payload ipPortraitBriefResponse) bool {
+	texts := []string{
+		payload.Data.Scene,
+		payload.Data.Company,
+		payload.Data.RiskScore,
+	}
+	for group, items := range payload.Data.SecurityRisks {
+		texts = append(texts, group)
+		for _, item := range items {
+			texts = append(texts, item.Label)
+			texts = append(texts, item.SubItems...)
+		}
+	}
+	if containsAnyRiskText(texts, "机房", "idc", "数据中心", "云主机", "云服务", "cdn", "代理", "vpn", "服务器", "托管", "劫持", "非正常设备", "黑rom") {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(payload.Data.RiskScore), "高") && payload.Data.HitRiskNum > 0
+}
+
+func containsAnyRiskText(values []string, needles ...string) bool {
+	for _, value := range values {
+		lower := strings.ToLower(value)
+		for _, needle := range needles {
+			if strings.Contains(lower, strings.ToLower(needle)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func templateUsesQRCode(body string) bool {

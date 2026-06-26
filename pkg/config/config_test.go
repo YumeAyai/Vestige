@@ -15,6 +15,7 @@ client:
   tracking_base_url: "https://track.example.com/jianji"
   tracking_source_token: "source-1"
   qr_code_target_url: "https://example.com/survey"
+  ip_portrait_url: "https://ip.example.com/brief-info"
 scf:
   tcb:
     env_id: "env-1"
@@ -35,6 +36,9 @@ scf:
 	}
 	if cfg.Client.TrackingBaseURL != "https://track.example.com/jianji" {
 		t.Fatalf("unexpected tracking base URL: %s", cfg.Client.TrackingBaseURL)
+	}
+	if cfg.Client.IPPortraitURL != "https://ip.example.com/brief-info" {
+		t.Fatalf("unexpected ip portrait URL: %s", cfg.Client.IPPortraitURL)
 	}
 	if cfg.SCF.TCB.EnvID != "env-1" || cfg.SCF.TCB.EventsCollection != "events" {
 		t.Fatalf("unexpected tcb config: %#v", cfg.SCF.TCB)

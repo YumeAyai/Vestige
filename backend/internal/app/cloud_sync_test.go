@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"testing"
 
+	"Vestige/pkg/config"
 	localdb "Vestige/pkg/db"
 )
 
@@ -176,5 +177,97 @@ func TestCloudOpenWithinFiveSecondsAfterDeliveryIsPrefetch(t *testing.T) {
 	}
 	if openCount != 0 || isPrefetch != 1 {
 		t.Fatalf("expected early open to be filtered, got open_count=%d is_prefetch=%d", openCount, isPrefetch)
+	}
+}
+
+func TestCloudOpenFromRiskyIPPortraitIsPrefetch(t *testing.T) {
+	conn, err := localdb.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if err := localdb.Migrate(conn); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := conn.Exec(`INSERT INTO contacts(name,email,company) VALUES(?,?,?)`, "Receiver", "receiver@example.com", "Example Co")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contactID, _ := res.LastInsertId()
+	res, err = conn.Exec(`INSERT INTO mailboxes(name,host,port,username,password,from_email,from_name,use_tls) VALUES(?,?,?,?,?,?,?,?)`,
+		"local", "127.0.0.1", 1, "user", "pass", "sender@example.com", "Sender", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mailboxID, _ := res.LastInsertId()
+	res, err = conn.Exec(`INSERT INTO campaigns(name,subject,body_html,mailbox_id,status) VALUES(?,?,?,?,?)`,
+		"Campaign", "Hello", "<p>Hello</p>", mailboxID, "draft")
+	if err != nil {
+		t.Fatal(err)
+	}
+	campaignID, _ := res.LastInsertId()
+	res, err = conn.Exec(`INSERT INTO campaign_recipients(campaign_id,contact_id,email,name,tracking_id,send_status,sent_at) VALUES(?,?,?,?,?,?,?)`,
+		campaignID, contactID, "receiver@example.com", "Receiver", "tracking-risk", "sent", "2026-06-09 10:00:00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientID, _ := res.LastInsertId()
+
+	previousClient := ipPortraitHTTPClient
+	ipPortraitHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if got := req.URL.Query().Get("ip"); got != "121.32.180.28" {
+			t.Fatalf("expected queried ip, got %q", got)
+		}
+		body := bytes.NewBufferString(`{
+			"code": 200,
+			"data": {
+				"scene": "家庭宽带",
+				"risk_score": "高",
+				"security_risks": {
+					"行为风险": [
+						{"label": "劫持代理IP", "subItems": ["劫持代理IP"]},
+						{"label": "代理IP", "subItems": ["代理IP"]}
+					],
+					"关联设备风险": [
+						{"label": "非正常设备IP", "subItems": ["疑似黑ROM设备IP"]}
+					]
+				},
+				"hit_risk_num": 3
+			}
+		}`)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(body),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+	t.Cleanup(func() { ipPortraitHTTPClient = previousClient })
+
+	cfg := config.Default()
+	cfg.Client.IPPortraitURL = "https://qifu.baidu.com/api/v1/ip-portrait/brief-info"
+	server := &Server{db: conn, cfg: cfg}
+	err = server.recordCloudOpenEvent(cloudTrackingEventInput{
+		Token:       "tracking-risk",
+		Kind:        "open",
+		TriggeredAt: "2026-06-09 10:10:00",
+		IP:          "121.32.180.28",
+		UserAgent:   "Mozilla/5.0 Chrome/120",
+	}, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var openCount, isPrefetch int
+	if err := conn.QueryRow(`SELECT open_count FROM campaign_recipients WHERE id=?`, recipientID).Scan(&openCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(`SELECT is_prefetch FROM open_events WHERE tracking_id='tracking-risk'`).Scan(&isPrefetch); err != nil {
+		t.Fatal(err)
+	}
+	if openCount != 0 || isPrefetch != 1 {
+		t.Fatalf("expected risky ip portrait to be filtered, got open_count=%d is_prefetch=%d", openCount, isPrefetch)
 	}
 }

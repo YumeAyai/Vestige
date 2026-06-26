@@ -21,6 +21,7 @@ type ClientConfig struct {
 	TrackingBaseURL     string `yaml:"tracking_base_url"`
 	TrackingSourceToken string `yaml:"tracking_source_token"`
 	QRCodeTargetURL     string `yaml:"qr_code_target_url"`
+	IPPortraitURL       string `yaml:"ip_portrait_url"`
 }
 
 type SCFConfig struct {
@@ -42,6 +43,7 @@ func Default() Config {
 			DBPath:          "data/app.db",
 			TrackingBaseURL: "https://xray-7g6vc4y2d2fc01be-1309857796.ap-shanghai.app.tcloudbase.com/jianji",
 			QRCodeTargetURL: "https://example.com/survey",
+			IPPortraitURL:   "https://qifu.baidu.com/api/v1/ip-portrait/brief-info",
 		},
 		SCF: SCFConfig{
 			TCB: TCBConfig{
@@ -93,6 +95,7 @@ func applyEnv(cfg *Config) {
 	setString(&cfg.Client.TrackingBaseURL, "TRACKING_BASE_URL")
 	setString(&cfg.Client.TrackingSourceToken, "TRACKING_SOURCE_TOKEN")
 	setString(&cfg.Client.QRCodeTargetURL, "QR_CODE_TARGET_URL")
+	setStringAny(&cfg.Client.IPPortraitURL, "TRACKING_IP_PORTRAIT_URL", "IP_PORTRAIT_URL")
 	setStringAny(&cfg.SCF.TCB.EnvID, "TCB_ENV_ID", "TCB_ENV", "SCF_NAMESPACE")
 	setString(&cfg.SCF.TCB.Region, "TCB_REGION")
 	setString(&cfg.SCF.TCB.EventsCollection, "TCB_EVENTS_COLLECTION")
