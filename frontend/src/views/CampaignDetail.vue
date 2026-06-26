@@ -161,10 +161,15 @@ function formatPrefetch(value) {
   return value ? '疑似预加载' : '正常加载'
 }
 
+function isIPPortraitLoading(item) {
+  if (!item?.qr_load_count || !item.last_qr_ip) return false
+  return !String(item.last_qr_ip_risk || '').trim()
+}
+
 function formatIPType(item) {
   if (!item?.qr_load_count) return '-'
   const summary = String(item.last_qr_ip_risk || '').trim()
-  if (!summary) return '未知'
+  if (!summary) return item.last_qr_ip ? '查询中' : '-'
   const parts = summary.split('/').map((part) => part.trim()).filter(Boolean)
   if (parts.some((part) => part.includes('家庭宽带'))) return '家庭宽带'
   if (parts.some((part) => part.includes('商业宽带') || part.includes('商用宽带') || part.includes('企业宽带') || part.includes('企业专线'))) return '商用宽带'
@@ -712,7 +717,13 @@ watch(
               <td>{{ formatDateTime(item.last_qr_load_at) }}</td>
               <td>{{ formatOrigin(item) }}</td>
               <td>{{ item.last_qr_ip || '-' }}</td>
-              <td :title="item.last_qr_ip_risk || ''">{{ formatIPType(item) }}</td>
+              <td :title="item.last_qr_ip_risk || (isIPPortraitLoading(item) ? '正在查询百度 IP 画像' : '')">
+                <span v-if="isIPPortraitLoading(item)" class="ip-type-loading">
+                  <span class="inline-spinner" aria-hidden="true"></span>
+                  查询中
+                </span>
+                <span v-else>{{ formatIPType(item) }}</span>
+              </td>
               <td>{{ item.qr_load_count > 0 ? formatPrefetch(item.last_qr_is_prefetch) : '-' }}</td>
               <td>{{ parseBrowser(item.last_qr_user_agent) }}</td>
               <td>{{ parseDevice(item.last_qr_user_agent) }}</td>
@@ -890,7 +901,13 @@ watch(
               <td>{{ formatDateTime(item.last_qr_load_at) }}</td>
               <td>{{ formatOrigin(item) }}</td>
               <td>{{ item.last_qr_ip || '-' }}</td>
-              <td :title="item.last_qr_ip_risk || ''">{{ formatIPType(item) }}</td>
+              <td :title="item.last_qr_ip_risk || (isIPPortraitLoading(item) ? '正在查询百度 IP 画像' : '')">
+                <span v-if="isIPPortraitLoading(item)" class="ip-type-loading">
+                  <span class="inline-spinner" aria-hidden="true"></span>
+                  查询中
+                </span>
+                <span v-else>{{ formatIPType(item) }}</span>
+              </td>
               <td>{{ item.qr_load_count > 0 ? formatPrefetch(item.last_qr_is_prefetch) : '-' }}</td>
               <td>{{ parseBrowser(item.last_qr_user_agent) }}</td>
               <td>{{ parseDevice(item.last_qr_user_agent) }}</td>
