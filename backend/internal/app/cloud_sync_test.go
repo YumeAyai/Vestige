@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"testing"
 
 	"Vestige/pkg/config"
@@ -269,13 +270,17 @@ func TestCloudOpenFromRiskyIPPortraitIsPrefetch(t *testing.T) {
 	}
 
 	var openCount, isPrefetch int
+	var ipRisk string
 	if err := conn.QueryRow(`SELECT open_count FROM campaign_recipients WHERE id=?`, recipientID).Scan(&openCount); err != nil {
 		t.Fatal(err)
 	}
-	if err := conn.QueryRow(`SELECT is_prefetch FROM open_events WHERE tracking_id='tracking-risk'`).Scan(&isPrefetch); err != nil {
+	if err := conn.QueryRow(`SELECT is_prefetch,ip_risk FROM open_events WHERE tracking_id='tracking-risk'`).Scan(&isPrefetch, &ipRisk); err != nil {
 		t.Fatal(err)
 	}
 	if openCount != 0 || isPrefetch != 1 {
 		t.Fatalf("expected risky ip portrait to be filtered, got open_count=%d is_prefetch=%d", openCount, isPrefetch)
+	}
+	if !strings.Contains(ipRisk, "代理IP") || !strings.Contains(ipRisk, "风险高") {
+		t.Fatalf("expected ip risk summary, got %q", ipRisk)
 	}
 }

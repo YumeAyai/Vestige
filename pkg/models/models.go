@@ -67,4 +67,5 @@ type Recipient struct {
 	LastQRReferer  string `json:"last_qr_referer"`
 	LastQRLang     string `json:"last_qr_accept_language"`
 	LastQRPrefetch bool   `json:"last_qr_is_prefetch"`
+	LastQRIPRisk   string `json:"last_qr_ip_risk"`
 }

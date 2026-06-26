@@ -161,6 +161,11 @@ function formatPrefetch(value) {
   return value ? '疑似预加载' : '正常加载'
 }
 
+function formatIPRisk(item) {
+  if (!item?.qr_load_count) return '-'
+  return item.last_qr_ip_risk || '未命中风险'
+}
+
 function sendStatusLabel(status) {
   return {
     pending: '就绪',
@@ -671,6 +676,7 @@ watch(
               <th>最近图片加载</th>
               <th>来源判断</th>
               <th>最近 IP</th>
+              <th>IP画像</th>
               <th>预加载</th>
               <th>浏览器</th>
               <th>设备</th>
@@ -697,6 +703,7 @@ watch(
               <td>{{ formatDateTime(item.last_qr_load_at) }}</td>
               <td>{{ formatOrigin(item) }}</td>
               <td>{{ item.last_qr_ip || '-' }}</td>
+              <td>{{ formatIPRisk(item) }}</td>
               <td>{{ item.qr_load_count > 0 ? formatPrefetch(item.last_qr_is_prefetch) : '-' }}</td>
               <td>{{ parseBrowser(item.last_qr_user_agent) }}</td>
               <td>{{ parseDevice(item.last_qr_user_agent) }}</td>
@@ -850,6 +857,7 @@ watch(
               <th>最近加载</th>
               <th>来源判断</th>
               <th>IP</th>
+              <th>IP画像</th>
               <th>预加载</th>
               <th>浏览器</th>
               <th>设备</th>
@@ -873,6 +881,7 @@ watch(
               <td>{{ formatDateTime(item.last_qr_load_at) }}</td>
               <td>{{ formatOrigin(item) }}</td>
               <td>{{ item.last_qr_ip || '-' }}</td>
+              <td>{{ formatIPRisk(item) }}</td>
               <td>{{ item.qr_load_count > 0 ? formatPrefetch(item.last_qr_is_prefetch) : '-' }}</td>
               <td>{{ parseBrowser(item.last_qr_user_agent) }}</td>
               <td>{{ parseDevice(item.last_qr_user_agent) }}</td>

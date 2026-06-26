@@ -1123,7 +1123,17 @@ func (s *Server) listRecipients(c *gin.Context) {
 					LIMIT 1
 				),
 				0
-			) last_qr_is_prefetch
+			) last_qr_is_prefetch,
+			COALESCE(
+				(
+					SELECT latest.ip_risk
+					FROM tracking_mark_events latest
+						WHERE latest.mark_id=tm.id AND latest.kind='image'
+					ORDER BY latest.triggered_at DESC, latest.id DESC
+					LIMIT 1
+				),
+				''
+			) last_qr_ip_risk
 		FROM campaign_recipients cr
 		LEFT JOIN tracking_marks tm ON tm.campaign_recipient_id=cr.id AND tm.kind='image'
 		LEFT JOIN tracking_mark_events tme ON tme.mark_id=tm.id AND tme.kind='image'
@@ -1138,7 +1148,7 @@ func (s *Server) listRecipients(c *gin.Context) {
 	items := []models.Recipient{}
 	for rows.Next() {
 		var item models.Recipient
-		if err := rows.Scan(&item.ID, &item.CampaignID, &item.ContactID, &item.Email, &item.Name, &item.TrackingID, &item.SendStatus, &item.FailureReason, &item.SentAt, &item.FirstOpenedAt, &item.LastOpenedAt, &item.OpenCount, &item.QRLoadCount, &item.FirstQRLoadAt, &item.LastQRLoadAt, &item.LastQRIP, &item.LastQRUA, &item.LastQRXFF, &item.LastQRSource, &item.LastQRReferer, &item.LastQRLang, &item.LastQRPrefetch); err != nil {
+		if err := rows.Scan(&item.ID, &item.CampaignID, &item.ContactID, &item.Email, &item.Name, &item.TrackingID, &item.SendStatus, &item.FailureReason, &item.SentAt, &item.FirstOpenedAt, &item.LastOpenedAt, &item.OpenCount, &item.QRLoadCount, &item.FirstQRLoadAt, &item.LastQRLoadAt, &item.LastQRIP, &item.LastQRUA, &item.LastQRXFF, &item.LastQRSource, &item.LastQRReferer, &item.LastQRLang, &item.LastQRPrefetch, &item.LastQRIPRisk); err != nil {
 			fail(c, err)
 			return
 		}
@@ -1565,29 +1575,31 @@ func (s *Server) recordCloudOpenEvent(event cloudTrackingEventInput, _ string) e
 	if parsed, ok := tracker.ParseEventTime(triggeredAt); ok {
 		eventAt = parsed
 	}
-	isPrefetch := s.cloudEventLooksLikePrefetch(event, sentAt, eventAt)
+	isPrefetch, ipRisk := s.cloudEventPrefetchInsight(event, sentAt, eventAt)
 	if triggeredAt == "" {
 		_, err := s.db.Exec(
-			`INSERT INTO open_events(campaign_recipient_id,tracking_id,event_index,ip,user_agent,is_prefetch) VALUES(?,?,?,?,?,?)`,
+			`INSERT INTO open_events(campaign_recipient_id,tracking_id,event_index,ip,user_agent,is_prefetch,ip_risk) VALUES(?,?,?,?,?,?,?)`,
 			recipientID,
 			event.Token,
 			event.EventIndex,
 			event.IP,
 			event.UserAgent,
 			isPrefetch,
+			ipRisk,
 		)
 		if err != nil {
 			return err
 		}
 	} else {
 		_, err := s.db.Exec(
-			`INSERT INTO open_events(campaign_recipient_id,tracking_id,event_index,ip,user_agent,is_prefetch,opened_at) VALUES(?,?,?,?,?,?,?)`,
+			`INSERT INTO open_events(campaign_recipient_id,tracking_id,event_index,ip,user_agent,is_prefetch,ip_risk,opened_at) VALUES(?,?,?,?,?,?,?,?)`,
 			recipientID,
 			event.Token,
 			event.EventIndex,
 			event.IP,
 			event.UserAgent,
 			isPrefetch,
+			ipRisk,
 			triggeredAt,
 		)
 		if err != nil {
@@ -1628,10 +1640,10 @@ func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string)
 	if parsed, ok := tracker.ParseEventTime(triggeredAt); ok {
 		eventAt = parsed
 	}
-	isPrefetch := s.cloudEventLooksLikePrefetch(event, sentAt, eventAt)
+	isPrefetch, ipRisk := s.cloudEventPrefetchInsight(event, sentAt, eventAt)
 	if triggeredAt == "" {
 		_, err := s.db.Exec(
-			`INSERT INTO tracking_mark_events(mark_id,token,kind,event_index,source,ip,user_agent,referer,accept_language,forwarded_for,is_prefetch,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?,?)`,
+			`INSERT INTO tracking_mark_events(mark_id,token,kind,event_index,source,ip,user_agent,referer,accept_language,forwarded_for,is_prefetch,ip_risk,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?,?,?)`,
 			markID,
 			event.Token,
 			kind,
@@ -1643,12 +1655,13 @@ func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string)
 			event.AcceptLanguage,
 			event.ForwardedFor,
 			isPrefetch,
+			ipRisk,
 			raw,
 		)
 		return err
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO tracking_mark_events(mark_id,token,kind,event_index,source,ip,user_agent,referer,accept_language,forwarded_for,is_prefetch,raw_payload,triggered_at) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO tracking_mark_events(mark_id,token,kind,event_index,source,ip,user_agent,referer,accept_language,forwarded_for,is_prefetch,ip_risk,raw_payload,triggered_at) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		markID,
 		event.Token,
 		kind,
@@ -1660,16 +1673,17 @@ func (s *Server) recordCloudMarkEvent(event cloudTrackingEventInput, raw string)
 		event.AcceptLanguage,
 		event.ForwardedFor,
 		isPrefetch,
+		ipRisk,
 		raw,
 		triggeredAt,
 	)
 	return err
 }
 
-func (s *Server) cloudEventLooksLikePrefetch(event cloudTrackingEventInput, sentAt string, eventAt time.Time) bool {
-	return tracker.LooksLikePrefetch(event.UserAgent) ||
-		tracker.LooksLikeDeliverySecurityScan(sentAt, eventAt) ||
-		s.ipPortraitLooksLikePrefetch(event.IP)
+func (s *Server) cloudEventPrefetchInsight(event cloudTrackingEventInput, sentAt string, eventAt time.Time) (bool, string) {
+	isPrefetch := tracker.LooksLikePrefetch(event.UserAgent) || tracker.LooksLikeDeliverySecurityScan(sentAt, eventAt)
+	ipPrefetch, ipRisk := s.ipPortraitPrefetchInsight(event.IP)
+	return isPrefetch || ipPrefetch, ipRisk
 }
 
 type ipPortraitBriefResponse struct {
@@ -1688,43 +1702,51 @@ type ipPortraitRiskCategory struct {
 	SubItems []string `json:"subItems"`
 }
 
-func (s *Server) ipPortraitLooksLikePrefetch(ip string) bool {
+type ipPortraitInsight struct {
+	Prefetch bool
+	Summary  string
+}
+
+func (s *Server) ipPortraitPrefetchInsight(ip string) (bool, string) {
 	ip = strings.TrimSpace(ip)
 	if ip == "" || ipPortraitIsLocal(ip) {
-		return false
+		return false, ""
 	}
 	endpoint := strings.TrimSpace(s.cfg.Client.IPPortraitURL)
 	if endpoint == "" {
-		return false
+		return false, ""
 	}
 	if cached, ok := s.ipPortraitCache.Load(ip); ok {
-		result, _ := cached.(bool)
-		return result
+		result, _ := cached.(ipPortraitInsight)
+		return result.Prefetch, result.Summary
 	}
 	requestURL, err := ipPortraitURL(endpoint, ip)
 	if err != nil {
-		return false
+		return false, ""
 	}
 	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
 	if err != nil {
-		return false
+		return false, ""
 	}
 	req.Header.Set("Referer", ipPortraitReferer(ip))
 	res, err := ipPortraitHTTPClient.Do(req)
 	if err != nil {
-		return false
+		return false, ""
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return false
+		return false, ""
 	}
 	var payload ipPortraitBriefResponse
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil || payload.Code != http.StatusOK {
-		return false
+		return false, ""
 	}
-	result := ipPortraitIndicatesPrefetch(payload)
+	result := ipPortraitInsight{
+		Prefetch: ipPortraitIndicatesPrefetch(payload),
+		Summary:  ipPortraitSummary(payload),
+	}
 	s.ipPortraitCache.Store(ip, result)
-	return result
+	return result.Prefetch, result.Summary
 }
 
 func ipPortraitURL(endpoint, ip string) (string, error) {
@@ -1772,6 +1794,47 @@ func ipPortraitIndicatesPrefetch(payload ipPortraitBriefResponse) bool {
 		return true
 	}
 	return strings.EqualFold(strings.TrimSpace(payload.Data.RiskScore), "高") && payload.Data.HitRiskNum > 0
+}
+
+func ipPortraitSummary(payload ipPortraitBriefResponse) string {
+	parts := []string{}
+	if value := strings.TrimSpace(payload.Data.RiskScore); value != "" {
+		parts = append(parts, "风险"+value)
+	}
+	if value := strings.TrimSpace(payload.Data.Scene); value != "" {
+		parts = append(parts, value)
+	}
+	if value := strings.TrimSpace(payload.Data.Company); value != "" {
+		parts = append(parts, value)
+	}
+	labels := []string{}
+	for _, items := range payload.Data.SecurityRisks {
+		for _, item := range items {
+			if label := strings.TrimSpace(item.Label); label != "" {
+				labels = append(labels, label)
+			}
+			for _, subItem := range item.SubItems {
+				if label := strings.TrimSpace(subItem); label != "" {
+					labels = append(labels, label)
+				}
+			}
+		}
+	}
+	parts = append(parts, uniqueStrings(labels)...)
+	return strings.Join(uniqueStrings(parts), " / ")
+}
+
+func uniqueStrings(values []string) []string {
+	seen := map[string]bool{}
+	result := []string{}
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		result = append(result, value)
+	}
+	return result
 }
 
 func containsAnyRiskText(values []string, needles ...string) bool {

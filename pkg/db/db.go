@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS open_events (
   ip TEXT NOT NULL DEFAULT '',
   user_agent TEXT NOT NULL DEFAULT '',
   is_prefetch INTEGER NOT NULL DEFAULT 0,
+  ip_risk TEXT NOT NULL DEFAULT '',
   opened_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(campaign_recipient_id) REFERENCES campaign_recipients(id) ON DELETE CASCADE
 );
@@ -124,6 +125,7 @@ CREATE TABLE IF NOT EXISTS tracking_mark_events (
   accept_language TEXT NOT NULL DEFAULT '',
   forwarded_for TEXT NOT NULL DEFAULT '',
   is_prefetch INTEGER NOT NULL DEFAULT 0,
+  ip_risk TEXT NOT NULL DEFAULT '',
   raw_payload TEXT NOT NULL DEFAULT '',
   triggered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(mark_id) REFERENCES tracking_marks(id) ON DELETE SET NULL
@@ -160,12 +162,14 @@ CREATE TABLE IF NOT EXISTS app_settings (
 		"forwarded_for":   "TEXT NOT NULL DEFAULT ''",
 		"event_index":     "TEXT NOT NULL DEFAULT ''",
 		"is_prefetch":     "INTEGER NOT NULL DEFAULT 0",
+		"ip_risk":         "TEXT NOT NULL DEFAULT ''",
 	})
 	if err != nil {
 		return err
 	}
 	if err := addColumns(conn, "open_events", map[string]string{
 		"event_index": "TEXT NOT NULL DEFAULT ''",
+		"ip_risk":     "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
 		return err
 	}
