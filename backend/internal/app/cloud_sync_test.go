@@ -122,3 +122,59 @@ func TestSyncCloudTrackingEventsImportsRemoteEventsByToken(t *testing.T) {
 		t.Fatalf("expected cursor to prevent duplicate fetch, got %#v", result)
 	}
 }
+
+func TestCloudOpenWithinFiveSecondsAfterDeliveryIsPrefetch(t *testing.T) {
+	conn, err := localdb.Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if err := localdb.Migrate(conn); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := conn.Exec(`INSERT INTO contacts(name,email,company) VALUES(?,?,?)`, "Receiver", "receiver@example.com", "Example Co")
+	if err != nil {
+		t.Fatal(err)
+	}
+	contactID, _ := res.LastInsertId()
+	res, err = conn.Exec(`INSERT INTO mailboxes(name,host,port,username,password,from_email,from_name,use_tls) VALUES(?,?,?,?,?,?,?,?)`,
+		"local", "127.0.0.1", 1, "user", "pass", "sender@example.com", "Sender", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mailboxID, _ := res.LastInsertId()
+	res, err = conn.Exec(`INSERT INTO campaigns(name,subject,body_html,mailbox_id,status) VALUES(?,?,?,?,?)`,
+		"Campaign", "Hello", "<p>Hello</p>", mailboxID, "draft")
+	if err != nil {
+		t.Fatal(err)
+	}
+	campaignID, _ := res.LastInsertId()
+	res, err = conn.Exec(`INSERT INTO campaign_recipients(campaign_id,contact_id,email,name,tracking_id,send_status,sent_at) VALUES(?,?,?,?,?,?,?)`,
+		campaignID, contactID, "receiver@example.com", "Receiver", "tracking-early", "sent", "2026-06-09 10:00:00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipientID, _ := res.LastInsertId()
+
+	server := &Server{db: conn}
+	err = server.recordCloudOpenEvent(cloudTrackingEventInput{
+		Token:       "tracking-early",
+		Kind:        "open",
+		TriggeredAt: "2026-06-09 10:00:03",
+	}, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var openCount, isPrefetch int
+	if err := conn.QueryRow(`SELECT open_count FROM campaign_recipients WHERE id=?`, recipientID).Scan(&openCount); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.QueryRow(`SELECT is_prefetch FROM open_events WHERE tracking_id='tracking-early'`).Scan(&isPrefetch); err != nil {
+		t.Fatal(err)
+	}
+	if openCount != 0 || isPrefetch != 1 {
+		t.Fatalf("expected early open to be filtered, got open_count=%d is_prefetch=%d", openCount, isPrefetch)
+	}
+}

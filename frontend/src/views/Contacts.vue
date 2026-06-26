@@ -2,13 +2,14 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../services/api'
+import { askConfirm } from '../utils/dialog'
 
 const router = useRouter()
 const items = ref([])
 const importing = ref(false)
 const total = ref(0)
 const offset = ref(0)
-const pageSize = ref(20)
+const pageSize = ref('20')
 const pageSizeOptions = [20, 50, 100, 200, 'all']
 const query = ref('')
 const selectedIds = ref([])
@@ -28,10 +29,11 @@ const columns = reactive([
 let resizeState = null
 
 const pageStart = computed(() => (total.value === 0 ? 0 : offset.value + 1))
-const pageEnd = computed(() => Math.min(offset.value + pageSize.value, total.value))
+const effectivePageSize = computed(() => (pageSize.value === 'all' ? total.value : Number(pageSize.value)))
+const pageEnd = computed(() => Math.min(offset.value + effectivePageSize.value, total.value))
 const allPageSelected = computed(() => items.value.length > 0 && items.value.every((item) => selectedIds.value.includes(item.id)))
 const hasPrevious = computed(() => offset.value > 0)
-const hasNext = computed(() => offset.value + pageSize.value < total.value)
+const hasNext = computed(() => pageSize.value !== 'all' && offset.value + effectivePageSize.value < total.value)
 
 async function load() {
   const data = await loadContactPage()
@@ -46,10 +48,11 @@ async function loadContactPage() {
   } catch (error) {
     const all = await api.contacts()
     const filtered = filterContacts(all)
+    const limit = effectivePageSize.value || filtered.length
     return {
-      items: filtered.slice(offset.value, offset.value + pageSize.value),
+      items: filtered.slice(offset.value, offset.value + limit),
       total: filtered.length,
-      limit: pageSize.value,
+      limit,
       offset: offset.value,
     }
   }
@@ -96,13 +99,18 @@ function getPageSizeLabel(size) {
 
 function previousPage() {
   if (!hasPrevious.value) return
-  offset.value = Math.max(0, offset.value - pageSize.value)
+  offset.value = Math.max(0, offset.value - effectivePageSize.value)
   load()
 }
 
 function nextPage() {
   if (!hasNext.value) return
-  offset.value += pageSize.value
+  offset.value += effectivePageSize.value
+  load()
+}
+
+function changePageSize() {
+  offset.value = 0
   load()
 }
 
@@ -138,7 +146,7 @@ async function applyBatchUpdate() {
 
 async function removeSelected() {
   if (selectedIds.value.length === 0) return
-  if (!confirm(`确认删除 ${selectedIds.value.length} 个未被任务使用的联系人？`)) return
+  if (!(await askConfirm(`确认删除 ${selectedIds.value.length} 个未被任务使用的联系人？`))) return
   const result = await api.deleteContactsBatch(selectedIds.value)
   notice.value = `已删除 ${result.deleted} 个联系人；已被邮件任务使用的联系人会保留`
   selectedIds.value = []
@@ -209,7 +217,7 @@ onMounted(load)
     <form class="panel grid five contact-form" @submit.prevent="save">
       <label>姓名<input v-model="form.name" /></label>
       <label>公司名称<input v-model="form.company" required /></label>
-      <label>邮箱<input v-model="form.email" type="email" required /></label>
+      <label>邮箱<input v-model="form.email" required /></label>
       <label>手机号<input v-model="form.phone" /></label>
       <label>标签<input v-model="form.tags" /></label>
       <label>备注<input v-model="form.notes" /></label>
@@ -272,8 +280,8 @@ onMounted(load)
       <div class="pager">
         <span>{{ pageStart }}-{{ pageEnd }} / {{ total }}</span>
         <button class="secondary" :disabled="!hasPrevious" @click="previousPage">上一页</button>
-        <select v-model="pageSize" @change="offset = 0; load()">
-          <option v-for="size in pageSizeOptions" :key="size" :value="size === 'all' ? total : size">
+        <select v-model="pageSize" @change="changePageSize">
+          <option v-for="size in pageSizeOptions" :key="size" :value="String(size)">
             {{ getPageSizeLabel(size) }}
           </option>
         </select>

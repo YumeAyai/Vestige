@@ -208,12 +208,15 @@ func (s *Server) listContacts(c *gin.Context) {
 }
 
 func (s *Server) pageContacts(c *gin.Context) {
+	allRows := strings.EqualFold(strings.TrimSpace(c.Query("limit")), "all")
 	limit := queryInt(c, "limit", 20)
-	if limit <= 0 {
-		limit = 20
-	}
-	if limit > 200 {
-		limit = 200
+	if !allRows {
+		if limit <= 0 {
+			limit = 20
+		}
+		if limit > 200 {
+			limit = 200
+		}
 	}
 	offset := queryInt(c, "offset", 0)
 	if offset < 0 {
@@ -233,6 +236,10 @@ func (s *Server) pageContacts(c *gin.Context) {
 	if err := s.db.QueryRow(`SELECT COUNT(*) FROM contacts `+where, args...).Scan(&total); err != nil {
 		fail(c, err)
 		return
+	}
+	if allRows {
+		limit = total
+		offset = 0
 	}
 
 	pageArgs := append([]any{}, args...)

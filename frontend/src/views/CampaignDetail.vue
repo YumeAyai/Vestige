@@ -126,6 +126,13 @@ function parseBrowser(ua) {
   return '其他'
 }
 
+function splitValues(value) {
+  return String(value || '')
+    .split(/[;；]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 function formatSource(source) {
   if (source === 'cloud') return '远端'
   if (source === 'local') return '本地'
@@ -674,7 +681,14 @@ watch(
           <tbody>
             <tr v-for="item in visibleRecipients" :key="item.id">
               <td class="company-cell">{{ item.name }}</td>
-              <td><span class="data-chip tone-0">{{ item.email }}</span></td>
+              <td>
+                <div class="chip-list">
+                  <span v-for="(email, index) in splitValues(item.email)" :key="email" class="data-chip"
+                    :class="`tone-${index % 5}`">
+                    {{ email }}
+                  </span>
+                </div>
+              </td>
               <td>
                 <span class="status" :class="item.send_status">{{ sendStatusLabel(item.send_status) }}</span>
               </td>
@@ -844,7 +858,14 @@ watch(
           <tbody>
             <tr v-for="item in imageRecipients" :key="item.id">
               <td class="company-cell">{{ item.name }}</td>
-              <td><span class="data-chip tone-0">{{ item.email }}</span></td>
+              <td>
+                <div class="chip-list">
+                  <span v-for="(email, index) in splitValues(item.email)" :key="email" class="data-chip"
+                    :class="`tone-${index % 5}`">
+                    {{ email }}
+                  </span>
+                </div>
+              </td>
               <td><span class="status" :class="item.send_status">{{ sendStatusLabel(item.send_status) }}</span></td>
               <td>{{ item.open_count }}</td>
               <td>{{ item.qr_load_count }}</td>

@@ -718,6 +718,7 @@ td a {
 }
 
 .contact-check {
+  appearance: none;
   background: #fff;
   border: 1px solid #aab4c4;
   border-radius: 5px;
@@ -728,8 +729,34 @@ td a {
   min-height: 17px;
   padding: 0;
   place-items: center;
+  position: relative;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
   vertical-align: middle;
   width: 17px;
+}
+
+.contact-check:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.contact-check:checked::after {
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  content: "";
+  height: 8px;
+  left: 5px;
+  position: absolute;
+  top: 2px;
+  transform: rotate(45deg);
+  width: 4px;
+}
+
+.contact-check:focus-visible {
+  box-shadow: 0 0 0 3px rgba(8, 127, 140, 0.18);
 }
 
 .pager {
