@@ -172,6 +172,7 @@ function formatIPType(item) {
   if (!summary) return item.last_qr_ip ? '查询中' : '-'
   const parts = summary.split('/').map((part) => part.trim()).filter(Boolean)
   if (parts.some((part) => part.includes('家庭宽带'))) return '家庭宽带'
+  if (parts.some((part) => part.includes('基站'))) return '基站'
   if (parts.some((part) => part.includes('商业宽带') || part.includes('商用宽带') || part.includes('企业宽带') || part.includes('企业专线'))) return '商用宽带'
   if (parts.some((part) => /机房|IDC|数据中心|云主机|云服务|服务器|托管/i.test(part))) return '机房/IDC'
   if (parts.some((part) => /代理|VPN|CDN/i.test(part))) return '代理IP'
