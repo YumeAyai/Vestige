@@ -67,10 +67,10 @@ const overviewMetrics = computed(() => {
 })
 
 const visibleRecipients = computed(() => {
-  if (filter.value === 'opened') return recipients.value.filter((item) => item.open_count > 0)
-  if (filter.value === 'qr_loaded') return recipients.value.filter((item) => item.qr_load_count > 0)
-  if (filter.value === 'qr_unloaded') return recipients.value.filter((item) => item.qr_load_count === 0)
-  if (filter.value === 'unopened') return recipients.value.filter((item) => item.open_count === 0)
+  if (filter.value === 'opened') return recipients.value.filter((item) => countValue(item.open_count) > 0)
+  if (filter.value === 'qr_loaded') return recipients.value.filter((item) => countValue(item.qr_load_count) > 0)
+  if (filter.value === 'qr_unloaded') return recipients.value.filter((item) => countValue(item.qr_load_count) === 0)
+  if (filter.value === 'unopened') return recipients.value.filter((item) => countValue(item.open_count) === 0)
   if (filter.value === 'pending')
     return recipients.value.filter((item) => item.send_status === 'pending')
   if (filter.value === 'waiting')
@@ -81,8 +81,8 @@ const visibleRecipients = computed(() => {
 })
 
 const imageRecipients = computed(() => {
-  if (imageFilter.value === 'loaded') return recipients.value.filter((item) => item.qr_load_count > 0)
-  if (imageFilter.value === 'unloaded') return recipients.value.filter((item) => item.qr_load_count === 0)
+  if (imageFilter.value === 'loaded') return recipients.value.filter((item) => countValue(item.qr_load_count) > 0)
+  if (imageFilter.value === 'unloaded') return recipients.value.filter((item) => countValue(item.qr_load_count) === 0)
   if (imageFilter.value === 'prefetch') return recipients.value.filter((item) => item.last_qr_is_prefetch)
   return recipients.value
 })
@@ -159,6 +159,15 @@ function formatOrigin(item) {
 
 function formatPrefetch(value) {
   return value ? '疑似预加载' : '正常加载'
+}
+
+function countValue(value) {
+  const count = Number(value)
+  return Number.isFinite(count) && count >= 0 ? count : 0
+}
+
+function formatLoadCount(value) {
+  return countValue(value)
 }
 
 function isIPPortraitLoading(item) {
@@ -728,7 +737,7 @@ watch(
               <td>{{ item.qr_load_count > 0 ? formatPrefetch(item.last_qr_is_prefetch) : '-' }}</td>
               <td>{{ parseBrowser(item.last_qr_user_agent) }}</td>
               <td>{{ parseDevice(item.last_qr_user_agent) }}</td>
-              <td>{{ item.open_count }}</td>
+              <td>{{ formatLoadCount(item.open_count) }}</td>
               <td>{{ item.failure_reason }}</td>
             </tr>
           </tbody>
@@ -896,8 +905,8 @@ watch(
                 </div>
               </td>
               <td><span class="status" :class="item.send_status">{{ sendStatusLabel(item.send_status) }}</span></td>
-              <td>{{ item.open_count }}</td>
-              <td>{{ item.qr_load_count }}</td>
+              <td>{{ formatLoadCount(item.open_count) }}</td>
+              <td>{{ formatLoadCount(item.qr_load_count) }}</td>
               <td>{{ formatDateTime(item.first_qr_load_at) }}</td>
               <td>{{ formatDateTime(item.last_qr_load_at) }}</td>
               <td>{{ formatOrigin(item) }}</td>
