@@ -1620,9 +1620,6 @@ func (s *Server) recordCloudOpenEvent(event cloudTrackingEventInput, _ string) e
 			return err
 		}
 	}
-	if isPrefetch {
-		return nil
-	}
 	_, err := s.db.Exec(
 		`UPDATE campaign_recipients SET open_count=open_count+1, first_opened_at=COALESCE(first_opened_at,?), last_opened_at=COALESCE(NULLIF(?,''),CURRENT_TIMESTAMP) WHERE id=?`,
 		firstNonEmpty(triggeredAt, time.Now().Format(time.RFC3339)),

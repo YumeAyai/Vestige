@@ -124,7 +124,7 @@ func TestSyncCloudTrackingEventsImportsRemoteEventsByToken(t *testing.T) {
 	}
 }
 
-func TestCloudOpenWithinFiveSecondsAfterDeliveryIsPrefetch(t *testing.T) {
+func TestCloudOpenWithinFiveSecondsAfterDeliveryIsMarkedPrefetch(t *testing.T) {
 	conn, err := localdb.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatal(err)
@@ -175,12 +175,12 @@ func TestCloudOpenWithinFiveSecondsAfterDeliveryIsPrefetch(t *testing.T) {
 	if err := conn.QueryRow(`SELECT is_prefetch FROM open_events WHERE tracking_id='tracking-early'`).Scan(&isPrefetch); err != nil {
 		t.Fatal(err)
 	}
-	if openCount != 0 || isPrefetch != 1 {
-		t.Fatalf("expected early open to be filtered, got open_count=%d is_prefetch=%d", openCount, isPrefetch)
+	if openCount != 1 || isPrefetch != 1 {
+		t.Fatalf("expected early open to be counted and marked, got open_count=%d is_prefetch=%d", openCount, isPrefetch)
 	}
 }
 
-func TestCloudOpenUsesCloudIPRiskAsPrefetch(t *testing.T) {
+func TestCloudOpenUsesCloudIPRiskAsPrefetchLabel(t *testing.T) {
 	conn, err := localdb.Open(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatal(err)
@@ -235,8 +235,8 @@ func TestCloudOpenUsesCloudIPRiskAsPrefetch(t *testing.T) {
 	if err := conn.QueryRow(`SELECT is_prefetch,ip_risk FROM open_events WHERE tracking_id='tracking-risk'`).Scan(&isPrefetch, &ipRisk); err != nil {
 		t.Fatal(err)
 	}
-	if openCount != 0 || isPrefetch != 1 {
-		t.Fatalf("expected risky ip portrait to be filtered, got open_count=%d is_prefetch=%d", openCount, isPrefetch)
+	if openCount != 1 || isPrefetch != 1 {
+		t.Fatalf("expected risky ip portrait to be counted and marked, got open_count=%d is_prefetch=%d", openCount, isPrefetch)
 	}
 	if !strings.Contains(ipRisk, "代理IP") || !strings.Contains(ipRisk, "风险高") {
 		t.Fatalf("expected ip risk summary, got %q", ipRisk)
