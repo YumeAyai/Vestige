@@ -161,9 +161,16 @@ function formatPrefetch(value) {
   return value ? '疑似预加载' : '正常加载'
 }
 
-function formatIPRisk(item) {
+function formatIPType(item) {
   if (!item?.qr_load_count) return '-'
-  return item.last_qr_ip_risk || '未命中风险'
+  const summary = String(item.last_qr_ip_risk || '').trim()
+  if (!summary) return '未知'
+  const parts = summary.split('/').map((part) => part.trim()).filter(Boolean)
+  if (parts.some((part) => part.includes('家庭宽带'))) return '家庭宽带'
+  if (parts.some((part) => part.includes('商业宽带') || part.includes('商用宽带') || part.includes('企业宽带') || part.includes('企业专线'))) return '商用宽带'
+  if (parts.some((part) => /机房|IDC|数据中心|云主机|云服务|服务器|托管/i.test(part))) return '机房/IDC'
+  if (parts.some((part) => /代理|VPN|CDN/i.test(part))) return '代理IP'
+  return parts.find((part) => !part.startsWith('风险')) || summary
 }
 
 function sendStatusLabel(status) {
@@ -678,7 +685,7 @@ watch(
               <th>最近图片加载</th>
               <th>来源判断</th>
               <th>最近 IP</th>
-              <th>IP画像</th>
+              <th>IP类型</th>
               <th>预加载</th>
               <th>浏览器</th>
               <th>设备</th>
@@ -705,7 +712,7 @@ watch(
               <td>{{ formatDateTime(item.last_qr_load_at) }}</td>
               <td>{{ formatOrigin(item) }}</td>
               <td>{{ item.last_qr_ip || '-' }}</td>
-              <td>{{ formatIPRisk(item) }}</td>
+              <td :title="item.last_qr_ip_risk || ''">{{ formatIPType(item) }}</td>
               <td>{{ item.qr_load_count > 0 ? formatPrefetch(item.last_qr_is_prefetch) : '-' }}</td>
               <td>{{ parseBrowser(item.last_qr_user_agent) }}</td>
               <td>{{ parseDevice(item.last_qr_user_agent) }}</td>
@@ -859,7 +866,7 @@ watch(
               <th>最近加载</th>
               <th>来源判断</th>
               <th>IP</th>
-              <th>IP画像</th>
+              <th>IP类型</th>
               <th>预加载</th>
               <th>浏览器</th>
               <th>设备</th>
@@ -883,7 +890,7 @@ watch(
               <td>{{ formatDateTime(item.last_qr_load_at) }}</td>
               <td>{{ formatOrigin(item) }}</td>
               <td>{{ item.last_qr_ip || '-' }}</td>
-              <td>{{ formatIPRisk(item) }}</td>
+              <td :title="item.last_qr_ip_risk || ''">{{ formatIPType(item) }}</td>
               <td>{{ item.qr_load_count > 0 ? formatPrefetch(item.last_qr_is_prefetch) : '-' }}</td>
               <td>{{ parseBrowser(item.last_qr_user_agent) }}</td>
               <td>{{ parseDevice(item.last_qr_user_agent) }}</td>
