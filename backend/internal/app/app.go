@@ -111,6 +111,14 @@ func NewWithConfig(db *sql.DB, frontend fs.FS, cfg config.Config) *gin.Engine {
 	return r
 }
 
+func (s *Server) localDataPath(parts ...string) string {
+	base := "data"
+	if dbPath := strings.TrimSpace(s.cfg.Client.DBPath); filepath.IsAbs(dbPath) {
+		base = filepath.Dir(dbPath)
+	}
+	return filepath.Join(append([]string{base}, parts...)...)
+}
+
 func (s *Server) listMailboxes(c *gin.Context) {
 	rows, err := s.db.Query(`SELECT id,name,host,port,username,from_email,from_name,use_tls FROM mailboxes ORDER BY id DESC`)
 	if err != nil {
@@ -646,7 +654,7 @@ func (s *Server) trackingImage(c *gin.Context) {
 			c.Status(http.StatusNotFound)
 			return
 		}
-		path := filepath.Join("data", "tracking-assets", name)
+		path := s.localDataPath("tracking-assets", name)
 		if _, err := os.Stat(path); err != nil {
 			c.Status(http.StatusNotFound)
 			return
@@ -705,7 +713,7 @@ func (s *Server) uploadCampaignAttachment(c *gin.Context) {
 	}
 	ext := strings.ToLower(filepath.Ext(originalName))
 	storedName := uuid.NewString() + ext
-	dir := filepath.Join("data", "campaign-attachments")
+	dir := s.localDataPath("campaign-attachments")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		fail(c, err)
 		return
@@ -978,7 +986,7 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 			body = s.appendAttachmentDownloadLinks(body, campaign.ID, rec.ID, attachments, baseURL, sourceToken, eventScope)
 		}
 		if err == nil {
-			err = sendMailWithTimeout(mb, rec.Email, rec.Name, subject, body, attachments, 20*time.Second)
+			err = sendMailWithTimeout(mb, rec.Email, rec.Name, subject, body, attachments, s.localDataPath("campaign-attachments"), 20*time.Second)
 		}
 		if err != nil {
 			failed++
@@ -1632,14 +1640,14 @@ func compactNotes(values map[string]string) string {
 	return strings.Join(parts, "；")
 }
 
-func sendMailWithTimeout(mb models.Mailbox, toEmail, toName, subject, body string, attachments []models.CampaignAttachment, timeout time.Duration) error {
+func sendMailWithTimeout(mb models.Mailbox, toEmail, toName, subject, body string, attachments []models.CampaignAttachment, attachmentDir string, timeout time.Duration) error {
 	mailAttachments := make([]mailer.Attachment, 0, len(attachments))
 	for _, attachment := range attachments {
 		if strings.TrimSpace(attachment.StoredName) == "" {
 			continue
 		}
 		mailAttachments = append(mailAttachments, mailer.Attachment{
-			Path: filepath.Join("data", "campaign-attachments", filepath.Base(attachment.StoredName)),
+			Path: filepath.Join(attachmentDir, filepath.Base(attachment.StoredName)),
 			Name: attachment.OriginalName,
 		})
 	}

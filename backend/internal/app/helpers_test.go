@@ -3,6 +3,7 @@ package app
 import (
 	"database/sql"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +70,20 @@ func TestTrackingBaseURLIgnoresAppBaseURLHeader(t *testing.T) {
 	got := server.trackingBaseURL(ctx)
 	if got != "https://track.example.com/jianji" {
 		t.Fatalf("tracking base URL used app base URL header: %s", got)
+	}
+}
+
+func TestLocalDataPathFollowsAbsoluteDBPath(t *testing.T) {
+	cfg := config.Default()
+	server := &Server{cfg: cfg}
+	if got := server.localDataPath("campaign-attachments"); got != filepath.Join("data", "campaign-attachments") {
+		t.Fatalf("relative DB path should use data dir, got %s", got)
+	}
+
+	cfg.Client.DBPath = filepath.Join(t.TempDir(), "app.db")
+	server = &Server{cfg: cfg}
+	if got, want := server.localDataPath("campaign-attachments"), filepath.Join(filepath.Dir(cfg.Client.DBPath), "campaign-attachments"); got != want {
+		t.Fatalf("absolute DB path should use DB dir: got %s want %s", got, want)
 	}
 }
 
