@@ -15,6 +15,7 @@ const contactQuery = ref('')
 const bodyMode = ref('preview')
 const preview = ref({ subject: '', body_html: '' })
 const previewError = ref('')
+const attachmentInput = ref(null)
 const attachmentFiles = ref([])
 const attachmentLinkBackup = ref(false)
 const attachmentError = ref('')
@@ -145,6 +146,15 @@ function selectAttachments(event) {
   attachmentError.value = ''
 }
 
+function openAttachmentPicker() {
+  attachmentInput.value?.click()
+}
+
+function removeAttachment(index) {
+  attachmentFiles.value = attachmentFiles.value.filter((_, itemIndex) => itemIndex !== index)
+  if (attachmentInput.value) attachmentInput.value.value = ''
+}
+
 onMounted(load)
 watch(
   () => [form.subject, form.body_html, form.contact_ids.join(','), contacts.value.length],
@@ -222,11 +232,34 @@ watch(
               带备用下载链接
             </label>
           </div>
-          <input type="file" multiple @change="selectAttachments" />
-          <div v-if="attachmentFiles.length" class="chip-list">
-            <span v-for="file in attachmentFiles" :key="file.name + file.size" class="data-chip tone-1">
-              {{ file.name }}
-            </span>
+          <input ref="attachmentInput" class="file-picker-input" type="file" multiple @change="selectAttachments" />
+          <div class="picker-list attachment-picker" role="listbox" aria-label="附件列表" aria-multiselectable="true">
+            <button class="picker-option" type="button" role="option" :aria-selected="false" @click="openAttachmentPicker">
+              <span class="picker-check" aria-hidden="true"></span>
+              <span class="picker-main">
+                <strong>选择附件</strong>
+                <small>支持多选，已选择 {{ attachmentFiles.length }} 个文件</small>
+              </span>
+            </button>
+            <button
+              v-for="(file, index) in attachmentFiles"
+              :key="file.name + file.size + file.lastModified"
+              class="picker-option selected"
+              type="button"
+              role="option"
+              :aria-selected="true"
+              @click="removeAttachment(index)"
+            >
+              <span class="picker-check" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M5 12.5l4.2 4.2L19 7" />
+                </svg>
+              </span>
+              <span class="picker-main">
+                <strong>{{ file.name }}</strong>
+                <small>{{ Math.ceil(file.size / 1024) }} KB，点击移除</small>
+              </span>
+            </button>
           </div>
           <p v-if="attachmentError" class="notice error">{{ attachmentError }}</p>
         </div>

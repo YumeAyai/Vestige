@@ -572,6 +572,18 @@ label {
   min-width: 0;
 }
 
+.file-picker-input {
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  width: 1px;
+}
+
+.attachment-picker {
+  max-height: 220px;
+}
+
 .picker-main strong,
 .picker-main small {
   overflow: hidden;
