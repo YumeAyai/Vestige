@@ -580,8 +580,69 @@ label {
   width: 1px;
 }
 
-.attachment-picker {
-  max-height: 220px;
+.attachment-upload-button {
+  width: fit-content;
+}
+
+.attachment-file-list {
+  display: grid;
+  gap: 8px;
+}
+
+.attachment-file {
+  align-items: center;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  min-height: 44px;
+  padding: 7px 8px 7px 11px;
+}
+
+.attachment-file-info {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.attachment-file-info strong,
+.attachment-file-info small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attachment-file-info strong {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 620;
+}
+
+.attachment-file-info small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.attachment-remove {
+  background: #fff;
+  border-color: #cfd6e2;
+  border-radius: 6px;
+  color: #667085;
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1;
+  min-height: 30px;
+  padding: 0;
+  width: 30px;
+}
+
+.attachment-remove:hover {
+  background: #fef3f2;
+  border-color: #fecdca;
+  color: var(--red);
+  box-shadow: none;
 }
 
 .picker-main strong,

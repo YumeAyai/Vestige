@@ -228,38 +228,24 @@ watch(
               <p class="muted">可直接夹带发送；勾选备用下载链接后，会额外生成可追踪下载入口。</p>
             </div>
             <label class="checkline">
-              <input v-model="attachmentLinkBackup" type="checkbox" />
+              <input v-model="attachmentLinkBackup" class="contact-check" type="checkbox" />
               带备用下载链接
             </label>
           </div>
           <input ref="attachmentInput" class="file-picker-input" type="file" multiple @change="selectAttachments" />
-          <div class="picker-list attachment-picker" role="listbox" aria-label="附件列表" aria-multiselectable="true">
-            <button class="picker-option" type="button" role="option" :aria-selected="false" @click="openAttachmentPicker">
-              <span class="picker-check" aria-hidden="true"></span>
-              <span class="picker-main">
-                <strong>选择附件</strong>
-                <small>支持多选，已选择 {{ attachmentFiles.length }} 个文件</small>
-              </span>
-            </button>
-            <button
-              v-for="(file, index) in attachmentFiles"
-              :key="file.name + file.size + file.lastModified"
-              class="picker-option selected"
-              type="button"
-              role="option"
-              :aria-selected="true"
-              @click="removeAttachment(index)"
-            >
-              <span class="picker-check" aria-hidden="true">
-                <svg viewBox="0 0 24 24">
-                  <path d="M5 12.5l4.2 4.2L19 7" />
-                </svg>
-              </span>
-              <span class="picker-main">
+          <button class="secondary attachment-upload-button" type="button" @click="openAttachmentPicker">
+            选择附件
+          </button>
+          <div v-if="attachmentFiles.length" class="attachment-file-list">
+            <div v-for="(file, index) in attachmentFiles" :key="file.name + file.size + file.lastModified" class="attachment-file">
+              <span class="attachment-file-info">
                 <strong>{{ file.name }}</strong>
-                <small>{{ Math.ceil(file.size / 1024) }} KB，点击移除</small>
+                <small>{{ Math.ceil(file.size / 1024) }} KB</small>
               </span>
-            </button>
+              <button type="button" class="attachment-remove" :aria-label="`移除 ${file.name}`" @click="removeAttachment(index)">
+                ×
+              </button>
+            </div>
           </div>
           <p v-if="attachmentError" class="notice error">{{ attachmentError }}</p>
         </div>
