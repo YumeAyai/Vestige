@@ -44,6 +44,18 @@ type Campaign struct {
 	SentAt          string `json:"sent_at"`
 }
 
+type CampaignAttachment struct {
+	ID           int64  `json:"id"`
+	CampaignID   int64  `json:"campaign_id"`
+	OriginalName string `json:"original_name"`
+	StoredName   string `json:"stored_name"`
+	ContentType  string `json:"content_type"`
+	Size         int64  `json:"size"`
+	LinkBackup   bool   `json:"link_backup"`
+	CloudAsset   string `json:"cloud_asset"`
+	CloudURL     string `json:"cloud_url"`
+}
+
 type Recipient struct {
 	ID             int64  `json:"id"`
 	CampaignID     int64  `json:"campaign_id"`

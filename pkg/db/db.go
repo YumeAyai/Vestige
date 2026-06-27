@@ -88,6 +88,20 @@ CREATE TABLE IF NOT EXISTS campaign_recipients (
   FOREIGN KEY(contact_id) REFERENCES contacts(id)
 );
 
+CREATE TABLE IF NOT EXISTS campaign_attachments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  campaign_id INTEGER,
+  original_name TEXT NOT NULL,
+  stored_name TEXT NOT NULL,
+  content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+  size INTEGER NOT NULL DEFAULT 0,
+  link_backup INTEGER NOT NULL DEFAULT 0,
+  cloud_asset TEXT NOT NULL DEFAULT '',
+  cloud_url TEXT NOT NULL DEFAULT '',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS open_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   campaign_recipient_id INTEGER NOT NULL,

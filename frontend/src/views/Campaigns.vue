@@ -15,6 +15,10 @@ const contactQuery = ref('')
 const bodyMode = ref('preview')
 const preview = ref({ subject: '', body_html: '' })
 const previewError = ref('')
+const attachmentFiles = ref([])
+const attachmentLinkBackup = ref(false)
+const attachmentError = ref('')
+const creating = ref(false)
 const form = reactive({
   name: '',
   subject: '',
@@ -114,12 +118,31 @@ async function renderPreview() {
 }
 
 async function create() {
-  const result = await api.createCampaign({
-    ...form,
-    mailbox_id: Number(form.mailbox_id),
-    contact_ids: form.contact_ids.map(Number),
-  })
-  router.push(`/campaigns/${result.id}`)
+  creating.value = true
+  attachmentError.value = ''
+  try {
+    const attachmentIds = []
+    for (const file of attachmentFiles.value) {
+      const uploaded = await api.uploadCampaignAttachment(file, { linkBackup: attachmentLinkBackup.value })
+      attachmentIds.push(uploaded.id)
+    }
+    const result = await api.createCampaign({
+      ...form,
+      mailbox_id: Number(form.mailbox_id),
+      contact_ids: form.contact_ids.map(Number),
+      attachment_ids: attachmentIds,
+    })
+    router.push(`/campaigns/${result.id}`)
+  } catch (err) {
+    attachmentError.value = err.message
+  } finally {
+    creating.value = false
+  }
+}
+
+function selectAttachments(event) {
+  attachmentFiles.value = Array.from(event.target.files || [])
+  attachmentError.value = ''
 }
 
 onMounted(load)
@@ -189,6 +212,25 @@ watch(
           <p v-if="previewError" class="notice error">{{ previewError }}</p>
         </div>
         <div class="field-block">
+          <div class="field-row">
+            <div>
+              <div class="field-label">附件</div>
+              <p class="muted">可直接夹带发送；勾选备用下载链接后，会额外生成可追踪下载入口。</p>
+            </div>
+            <label class="checkline">
+              <input v-model="attachmentLinkBackup" type="checkbox" />
+              带备用下载链接
+            </label>
+          </div>
+          <input type="file" multiple @change="selectAttachments" />
+          <div v-if="attachmentFiles.length" class="chip-list">
+            <span v-for="file in attachmentFiles" :key="file.name + file.size" class="data-chip tone-1">
+              {{ file.name }}
+            </span>
+          </div>
+          <p v-if="attachmentError" class="notice error">{{ attachmentError }}</p>
+        </div>
+        <div class="field-block">
           <div class="field-label">收件人</div>
           <input v-model="contactQuery" placeholder="搜索公司、邮箱、电话或标签" />
           <div class="picker-list" role="listbox" aria-label="收件人列表" aria-multiselectable="true">
@@ -216,7 +258,7 @@ watch(
           </div>
           <p class="muted">已选择 {{ form.contact_ids.length }} 个收件人，系统会逐个单独发送。</p>
         </div>
-        <button :disabled="!canCreate">创建任务</button>
+        <button :disabled="!canCreate || creating">{{ creating ? '创建中...' : '创建任务' }}</button>
       </form>
 
       <div class="panel">

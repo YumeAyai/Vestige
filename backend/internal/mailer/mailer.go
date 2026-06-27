@@ -25,6 +25,11 @@ type Personalization struct {
 	TrackingLink  func(label, targetURL string) template.URL
 }
 
+type Attachment struct {
+	Path string
+	Name string
+}
+
 func RenderBody(body string, data Personalization) (string, error) {
 	tpl, err := template.New("mail").Funcs(template.FuncMap{
 		"TrackingImage": func(asset string) template.HTML {
@@ -58,7 +63,7 @@ func RenderBody(body string, data Personalization) (string, error) {
 	return buf.String(), nil
 }
 
-func Send(mailbox models.Mailbox, toEmail, toName, subject, html string) error {
+func Send(mailbox models.Mailbox, toEmail, toName, subject, html string, attachments ...Attachment) error {
 	mailbox = NormalizeMailbox(mailbox)
 	if err := ValidateMailbox(mailbox); err != nil {
 		return err
@@ -68,19 +73,31 @@ func Send(mailbox models.Mailbox, toEmail, toName, subject, html string) error {
 		return err
 	}
 	for _, email := range toEmails {
-		if err := sendOne(mailbox, email, toName, subject, html); err != nil {
+		if err := sendOne(mailbox, email, toName, subject, html, attachments); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func sendOne(mailbox models.Mailbox, toEmail, toName, subject, html string) error {
+func sendOne(mailbox models.Mailbox, toEmail, toName, subject, html string, attachments []Attachment) error {
 	msg := gomail.NewMessage()
 	msg.SetAddressHeader("From", mailbox.FromEmail, mailbox.FromName)
 	msg.SetAddressHeader("To", toEmail, toName)
 	msg.SetHeader("Subject", subject)
 	msg.SetBody("text/html", html)
+	for _, attachment := range attachments {
+		path := strings.TrimSpace(attachment.Path)
+		if path == "" {
+			continue
+		}
+		name := strings.TrimSpace(attachment.Name)
+		if name == "" {
+			msg.Attach(path)
+			continue
+		}
+		msg.Attach(path, gomail.Rename(name))
+	}
 
 	dialer := gomail.NewDialer(mailbox.Host, mailbox.Port, mailbox.Username, mailbox.Password)
 	dialer.SSL = mailbox.Port == 465

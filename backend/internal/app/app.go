@@ -74,6 +74,7 @@ func NewWithConfig(db *sql.DB, frontend fs.FS, cfg config.Config) *gin.Engine {
 	api.POST("/templates/tracking-image-asset", s.createTemplateTrackingImageAsset)
 	api.POST("/templates/preview", s.previewTemplate)
 	api.GET("/campaigns", s.listCampaigns)
+	api.POST("/campaign-attachments", s.uploadCampaignAttachment)
 	api.POST("/campaigns", s.createCampaign)
 	api.GET("/campaigns/:id", s.getCampaign)
 	api.POST("/campaigns/:id/send", s.sendCampaign)
@@ -562,7 +563,7 @@ func (s *Server) createTemplateTrackingImageAsset(c *gin.Context) {
 	if label == "" {
 		label = "企业微信二维码"
 	}
-	payload, err := forwardTrackingAsset(s.trackingBaseURL(c), file, label, width)
+	payload, err := forwardAsset(s.trackingBaseURL(c), file, label, width, "image")
 	if err != nil {
 		fail(c, err)
 		return
@@ -681,6 +682,80 @@ type createCampaignInput struct {
 	MailboxID       int64   `json:"mailbox_id"`
 	TrackingEnabled bool    `json:"tracking_enabled"`
 	ContactIDs      []int64 `json:"contact_ids"`
+	AttachmentIDs   []int64 `json:"attachment_ids"`
+}
+
+func (s *Server) uploadCampaignAttachment(c *gin.Context) {
+	file, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "请上传附件"})
+		return
+	}
+	if file.Size <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "附件不能为空"})
+		return
+	}
+	if file.Size > 20<<20 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "附件不能超过 20MB"})
+		return
+	}
+	originalName := filepath.Base(file.Filename)
+	if originalName == "." || originalName == string(filepath.Separator) || strings.TrimSpace(originalName) == "" {
+		originalName = "attachment"
+	}
+	ext := strings.ToLower(filepath.Ext(originalName))
+	storedName := uuid.NewString() + ext
+	dir := filepath.Join("data", "campaign-attachments")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fail(c, err)
+		return
+	}
+	path := filepath.Join(dir, storedName)
+	if err := c.SaveUploadedFile(file, path); err != nil {
+		fail(c, err)
+		return
+	}
+	contentType := firstNonEmpty(file.Header.Get("Content-Type"), mime.TypeByExtension(ext), "application/octet-stream")
+	linkBackup := strings.EqualFold(c.PostForm("link_backup"), "true") || c.PostForm("link_backup") == "1"
+	cloudAsset := ""
+	cloudURL := ""
+	if linkBackup {
+		payload, err := forwardAsset(s.trackingBaseURL(c), file, originalName, 0, "attachment")
+		if err != nil {
+			fail(c, err)
+			return
+		}
+		cloudAsset, _ = payload["asset"].(string)
+		cloudURL, _ = payload["download_url"].(string)
+		if strings.TrimSpace(cloudURL) == "" {
+			fail(c, errors.New("云端附件未返回下载链接"))
+			return
+		}
+	}
+	res, err := s.db.Exec(
+		`INSERT INTO campaign_attachments(original_name,stored_name,content_type,size,link_backup,cloud_asset,cloud_url) VALUES(?,?,?,?,?,?,?)`,
+		originalName,
+		storedName,
+		contentType,
+		file.Size,
+		linkBackup,
+		cloudAsset,
+		cloudURL,
+	)
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	id, _ := res.LastInsertId()
+	c.JSON(http.StatusCreated, gin.H{
+		"id":            id,
+		"original_name": originalName,
+		"content_type":  contentType,
+		"size":          file.Size,
+		"link_backup":   linkBackup,
+		"cloud_asset":   cloudAsset,
+		"cloud_url":     cloudURL,
+	})
 }
 
 func (s *Server) createCampaign(c *gin.Context) {
@@ -710,6 +785,12 @@ func (s *Server) createCampaign(c *gin.Context) {
 		_, err = tx.Exec(`INSERT INTO campaign_recipients(campaign_id,contact_id,email,name,tracking_id) VALUES(?,?,?,?,?)`,
 			campaignID, ct.ID, ct.Email, ct.Name, uuid.NewString())
 		if err != nil {
+			fail(c, err)
+			return
+		}
+	}
+	for _, attachmentID := range input.AttachmentIDs {
+		if _, err := tx.Exec(`UPDATE campaign_attachments SET campaign_id=? WHERE id=? AND campaign_id IS NULL`, campaignID, attachmentID); err != nil {
 			fail(c, err)
 			return
 		}
@@ -794,6 +875,11 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 		return
 	}
 	variants, err := s.prepareCampaignVariants(campaignID)
+	if err != nil {
+		_, _ = s.db.Exec(`UPDATE campaigns SET status='partial_failed' WHERE id=?`, campaignID)
+		return
+	}
+	attachments, err := s.campaignAttachments(campaignID)
 	if err != nil {
 		_, _ = s.db.Exec(`UPDATE campaigns SET status='partial_failed' WHERE id=?`, campaignID)
 		return
@@ -889,9 +975,10 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 		body, err := mailer.RenderBody(bodyTemplate, data)
 		if err == nil {
 			body = tracker.InjectPixelWithSourceAndIndex(body, baseURL, sourceToken, rec.TrackingID, strconv.FormatInt(campaign.ID, 10), eventScope+":open")
+			body = s.appendAttachmentDownloadLinks(body, campaign.ID, rec.ID, attachments, baseURL, sourceToken, eventScope)
 		}
 		if err == nil {
-			err = sendMailWithTimeout(mb, rec.Email, rec.Name, subject, body, 20*time.Second)
+			err = sendMailWithTimeout(mb, rec.Email, rec.Name, subject, body, attachments, 20*time.Second)
 		}
 		if err != nil {
 			failed++
@@ -987,6 +1074,48 @@ func weightedVariant(variants []campaignVariant, index int) campaignVariant {
 		slot -= variant.Weight
 	}
 	return variants[len(variants)-1]
+}
+
+func (s *Server) campaignAttachments(campaignID int64) ([]models.CampaignAttachment, error) {
+	rows, err := s.db.Query(`SELECT id,campaign_id,original_name,stored_name,content_type,size,link_backup,cloud_asset,cloud_url FROM campaign_attachments WHERE campaign_id=? ORDER BY id`, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	attachments := []models.CampaignAttachment{}
+	for rows.Next() {
+		var attachment models.CampaignAttachment
+		if err := rows.Scan(&attachment.ID, &attachment.CampaignID, &attachment.OriginalName, &attachment.StoredName, &attachment.ContentType, &attachment.Size, &attachment.LinkBackup, &attachment.CloudAsset, &attachment.CloudURL); err != nil {
+			return nil, err
+		}
+		attachments = append(attachments, attachment)
+	}
+	return attachments, rows.Err()
+}
+
+func (s *Server) appendAttachmentDownloadLinks(body string, campaignID, recipientID int64, attachments []models.CampaignAttachment, baseURL, sourceToken, eventScope string) string {
+	links := []string{}
+	for _, attachment := range attachments {
+		if !attachment.LinkBackup || strings.TrimSpace(attachment.CloudURL) == "" {
+			continue
+		}
+		label := "附件下载：" + attachment.OriginalName
+		token, err := s.ensureTrackingMarkForTarget(recipientID, "click", label, attachment.CloudURL)
+		if err != nil {
+			continue
+		}
+		href := tracker.RedirectURLWithSourceAndIndex(baseURL, sourceToken, strconv.FormatInt(campaignID, 10), label, token, attachment.CloudURL, eventScope+":attachment:"+attachment.OriginalName)
+		links = append(links, `<li><a href="`+template.HTMLEscapeString(href)+`">`+template.HTMLEscapeString(attachment.OriginalName)+`</a></li>`)
+	}
+	if len(links) == 0 {
+		return body
+	}
+	block := `<div style="margin-top:16px"><p>附件备用下载：</p><ul>` + strings.Join(links, "") + `</ul></div>`
+	lower := strings.ToLower(body)
+	if idx := strings.LastIndex(lower, "</body>"); idx >= 0 {
+		return body[:idx] + block + body[idx:]
+	}
+	return body + block
 }
 
 func (s *Server) campaignStats(c *gin.Context) {
@@ -1503,10 +1632,20 @@ func compactNotes(values map[string]string) string {
 	return strings.Join(parts, "；")
 }
 
-func sendMailWithTimeout(mb models.Mailbox, toEmail, toName, subject, body string, timeout time.Duration) error {
+func sendMailWithTimeout(mb models.Mailbox, toEmail, toName, subject, body string, attachments []models.CampaignAttachment, timeout time.Duration) error {
+	mailAttachments := make([]mailer.Attachment, 0, len(attachments))
+	for _, attachment := range attachments {
+		if strings.TrimSpace(attachment.StoredName) == "" {
+			continue
+		}
+		mailAttachments = append(mailAttachments, mailer.Attachment{
+			Path: filepath.Join("data", "campaign-attachments", filepath.Base(attachment.StoredName)),
+			Name: attachment.OriginalName,
+		})
+	}
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- mailer.Send(mb, toEmail, toName, subject, body)
+		errCh <- mailer.Send(mb, toEmail, toName, subject, body, mailAttachments...)
 	}()
 	select {
 	case err := <-errCh:
@@ -1845,7 +1984,7 @@ func allowedTrackingImageExt(ext string) bool {
 	}
 }
 
-func forwardTrackingAsset(baseURL string, file *multipart.FileHeader, label string, width int) (gin.H, error) {
+func forwardAsset(baseURL string, file *multipart.FileHeader, label string, width int, kind string) (gin.H, error) {
 	src, err := file.Open()
 	if err != nil {
 		return nil, err
@@ -1865,6 +2004,9 @@ func forwardTrackingAsset(baseURL string, file *multipart.FileHeader, label stri
 		return nil, err
 	}
 	if err := writer.WriteField("width", strconv.Itoa(width)); err != nil {
+		return nil, err
+	}
+	if err := writer.WriteField("kind", kind); err != nil {
 		return nil, err
 	}
 	if err := writer.Close(); err != nil {

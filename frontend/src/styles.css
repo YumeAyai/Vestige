@@ -440,6 +440,14 @@ label {
   justify-content: space-between;
 }
 
+.checkline {
+  align-items: center;
+  display: inline-flex;
+  flex-direction: row;
+  gap: 8px;
+  width: auto;
+}
+
 .field-label {
   color: #344054;
   font-size: 12px;

@@ -55,7 +55,7 @@ func (h *Handler) Handle(ctx context.Context, event model.SCFEvent) (model.SCFRe
 	case method == "GET" && path == "/api/stats":
 		return h.stats(ctx, event)
 	case method == "GET" && path == "/api/assets":
-		return jsonResponse(200, map[string]any{"ok": true, "method": "POST", "content_type": "multipart/form-data"}), nil
+		return h.downloadAsset(ctx, event)
 	case method == "POST" && path == "/api/assets":
 		return h.uploadAsset(ctx, event)
 	default:
@@ -187,7 +187,7 @@ func (h *Handler) uploadAsset(ctx context.Context, event model.SCFEvent) (model.
 	contentType := header(event, "Content-Type")
 	mediaType, params, err := mime.ParseMediaType(contentType)
 	if err != nil || !strings.HasPrefix(mediaType, "multipart/") {
-		return jsonResponse(400, map[string]any{"error": "请上传企业微信二维码图片"}), nil
+		return jsonResponse(400, map[string]any{"error": "请上传文件"}), nil
 	}
 
 	var buf bytes.Buffer
@@ -202,15 +202,15 @@ func (h *Handler) uploadAsset(ctx context.Context, event model.SCFEvent) (model.
 	}
 
 	reader := multipart.NewReader(&buf, params["boundary"])
-	form, err := reader.ReadForm(8 << 20)
+	form, err := reader.ReadForm(25 << 20)
 	if err != nil {
-		return jsonResponse(400, map[string]any{"error": "请上传企业微信二维码图片"}), nil
+		return jsonResponse(400, map[string]any{"error": "请上传文件"}), nil
 	}
 	defer form.RemoveAll()
 
 	files := form.File["file"]
 	if len(files) == 0 {
-		return jsonResponse(400, map[string]any{"error": "请上传企业微信二维码图片"}), nil
+		return jsonResponse(400, map[string]any{"error": "请上传文件"}), nil
 	}
 	fileHeader := files[0]
 	file, err := fileHeader.Open()
@@ -225,12 +225,16 @@ func (h *Handler) uploadAsset(ctx context.Context, event model.SCFEvent) (model.
 	}
 
 	contentType = firstNonEmpty(fileHeader.Header.Get("Content-Type"), http.DetectContentType(data.Bytes()))
+	kind := strings.TrimSpace(formValue(form.Value, "kind"))
 	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
 	if ext == "" {
 		ext = imageExt(contentType)
 	}
-	if !allowedTrackingImageExt(ext) {
+	if kind != "attachment" && !allowedTrackingImageExt(ext) {
 		return jsonResponse(400, map[string]any{"error": "仅支持 PNG、JPG、GIF 或 WebP 图片"}), nil
+	}
+	if ext == "" {
+		ext = ".bin"
 	}
 
 	width := formValueInt(formValue(form.Value, "width"), 176)
@@ -261,6 +265,13 @@ func (h *Handler) uploadAsset(ctx context.Context, event model.SCFEvent) (model.
 	}
 
 	baseURL := h.trackingBaseURL(event)
+	if kind == "attachment" {
+		return jsonResponse(200, map[string]any{
+			"label":        label,
+			"asset":        name,
+			"download_url": assetDownloadURL(baseURL, name),
+		}), nil
+	}
 	return jsonResponse(200, map[string]any{
 		"label":       label,
 		"asset":       name,
@@ -269,6 +280,25 @@ func (h *Handler) uploadAsset(ctx context.Context, event model.SCFEvent) (model.
 		"html":        tracker.TrackingImageHTML(baseURL, "preview", name, label, width),
 		"collects":    []string{"ip", "user_agent", "referer", "accept_language", "forwarded_for", "triggered_at", "is_prefetch"},
 	}), nil
+}
+
+func (h *Handler) downloadAsset(ctx context.Context, event model.SCFEvent) (model.SCFResponse, error) {
+	query := eventQuery(event)
+	name := filepath.Base(strings.TrimSpace(query.Get("asset")))
+	if name == "" || name != strings.TrimSpace(query.Get("asset")) {
+		return jsonResponse(200, map[string]any{"ok": true, "method": "POST", "content_type": "multipart/form-data"}), nil
+	}
+	asset, err := h.Store.GetAsset(ctx, name)
+	if err != nil {
+		return model.SCFResponse{StatusCode: http.StatusNotFound}, nil
+	}
+	contentType := firstNonEmpty(asset.ContentType, mime.TypeByExtension(filepath.Ext(asset.Name)), "application/octet-stream")
+	return model.SCFResponse{
+		StatusCode:      http.StatusOK,
+		Headers:         downloadHeaders(contentType, asset.Label),
+		Body:            base64.StdEncoding.EncodeToString(asset.Data),
+		IsBase64Encoded: true,
+	}, nil
 }
 
 func (h *Handler) record(ctx context.Context, event model.SCFEvent, kind string) error {
@@ -560,6 +590,22 @@ func responseHeaders(contentType string) map[string]string {
 		"Content-Type":  contentType,
 		"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
 	}
+}
+
+func downloadHeaders(contentType, filename string) map[string]string {
+	headers := responseHeaders(contentType)
+	name := strings.ReplaceAll(filepath.Base(strings.TrimSpace(filename)), `"`, "")
+	if name == "" || name == "." {
+		name = "attachment"
+	}
+	headers["Content-Disposition"] = `attachment; filename="` + name + `"`
+	return headers
+}
+
+func assetDownloadURL(baseURL, asset string) string {
+	values := url.Values{}
+	values.Set("asset", asset)
+	return strings.TrimRight(baseURL, "/") + "/api/assets?" + values.Encode()
 }
 
 func redirectResponse(location string) model.SCFResponse {
