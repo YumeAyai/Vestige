@@ -87,6 +87,19 @@ func TestLocalDataPathFollowsAbsoluteDBPath(t *testing.T) {
 	}
 }
 
+func TestCampaignSendDelayLimitsToTenPerMinute(t *testing.T) {
+	now := time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC)
+	if delay := campaignSendDelay(time.Time{}, now); delay != 0 {
+		t.Fatalf("first send should not wait, got %s", delay)
+	}
+	if delay := campaignSendDelay(now, now.Add(2*time.Second)); delay != 4*time.Second {
+		t.Fatalf("expected 4s remaining delay, got %s", delay)
+	}
+	if delay := campaignSendDelay(now, now.Add(6*time.Second)); delay != 0 {
+		t.Fatalf("send at interval boundary should not wait, got %s", delay)
+	}
+}
+
 func TestImageExtensionHelpers(t *testing.T) {
 	if got := imageExt(" image/png "); got != ".png" {
 		t.Fatalf("imageExt returned %q", got)

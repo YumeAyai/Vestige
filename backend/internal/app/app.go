@@ -43,6 +43,8 @@ type Server struct {
 
 var cloudHTTPClient = &http.Client{Timeout: 2500 * time.Millisecond}
 
+const campaignSendInterval = time.Minute / 10
+
 func New(db *sql.DB, frontend fs.FS) *gin.Engine {
 	return NewWithConfig(db, frontend, config.MustLoadDefault())
 }
@@ -925,6 +927,7 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 		return
 	}
 	failed := 0
+	var lastSendAt time.Time
 	for _, target := range targets {
 		rec := target.recipient
 		contact := target.contact
@@ -986,6 +989,7 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 			body = s.appendAttachmentDownloadLinks(body, campaign.ID, rec.ID, attachments, baseURL, sourceToken, eventScope)
 		}
 		if err == nil {
+			waitForCampaignSendSlot(&lastSendAt)
 			err = sendMailWithTimeout(mb, rec.Email, rec.Name, subject, body, attachments, s.localDataPath("campaign-attachments"), 20*time.Second)
 		}
 		if err != nil {
@@ -994,13 +998,32 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 			continue
 		}
 		_, _ = s.db.Exec(`UPDATE campaign_recipients SET send_status='sent',failure_reason='',sent_at=CURRENT_TIMESTAMP WHERE id=?`, rec.ID)
-		time.Sleep(300 * time.Millisecond)
 	}
 	status := "completed"
 	if failed > 0 {
 		status = "partial_failed"
 	}
 	_, _ = s.db.Exec(`UPDATE campaigns SET status=?,sent_at=COALESCE(sent_at,CURRENT_TIMESTAMP) WHERE id=?`, status, campaignID)
+}
+
+func waitForCampaignSendSlot(lastSendAt *time.Time) {
+	now := time.Now()
+	if delay := campaignSendDelay(*lastSendAt, now); delay > 0 {
+		time.Sleep(delay)
+		now = time.Now()
+	}
+	*lastSendAt = now
+}
+
+func campaignSendDelay(lastSendAt, now time.Time) time.Duration {
+	if lastSendAt.IsZero() {
+		return 0
+	}
+	nextSendAt := lastSendAt.Add(campaignSendInterval)
+	if now.Before(nextSendAt) {
+		return nextSendAt.Sub(now)
+	}
+	return 0
 }
 
 type campaignVariant struct {
