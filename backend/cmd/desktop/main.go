@@ -121,6 +121,12 @@ func (a *DesktopApp) SelectContactImportFile() (string, error) {
 	})
 }
 
+func (a *DesktopApp) SelectCampaignAttachmentFiles() ([]string, error) {
+	return runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择邮件附件",
+	})
+}
+
 func (a *DesktopApp) ImportContactsFromFileDialog() (app.ContactImportResult, error) {
 	path, err := a.SelectContactImportFile()
 	if err != nil || path == "" {

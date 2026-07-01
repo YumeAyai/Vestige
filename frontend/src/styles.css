@@ -572,6 +572,10 @@ label {
   min-width: 0;
 }
 
+.attachment-upload-button {
+  width: fit-content;
+}
+
 .attachment-file-list {
   display: grid;
   gap: 8px;
