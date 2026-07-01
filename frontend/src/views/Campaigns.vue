@@ -228,10 +228,7 @@ watch(
               带备用下载链接
             </label>
           </div>
-          <label class="button secondary attachment-upload-button">
-            选择附件
-            <input ref="attachmentInput" class="file-picker-input" type="file" multiple @change="selectAttachments" />
-          </label>
+          <label>上传附件<input ref="attachmentInput" type="file" multiple @change="selectAttachments" /></label>
           <div v-if="attachmentFiles.length" class="attachment-file-list">
             <div v-for="(file, index) in attachmentFiles" :key="file.name + file.size + file.lastModified" class="attachment-file">
               <span class="attachment-file-info">
