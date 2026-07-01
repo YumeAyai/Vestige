@@ -146,10 +146,6 @@ function selectAttachments(event) {
   attachmentError.value = ''
 }
 
-function openAttachmentPicker() {
-  attachmentInput.value?.click()
-}
-
 function removeAttachment(index) {
   attachmentFiles.value = attachmentFiles.value.filter((_, itemIndex) => itemIndex !== index)
   if (attachmentInput.value) attachmentInput.value.value = ''
@@ -232,10 +228,10 @@ watch(
               带备用下载链接
             </label>
           </div>
-          <input ref="attachmentInput" class="file-picker-input" type="file" multiple @change="selectAttachments" />
-          <button class="secondary attachment-upload-button" type="button" @click="openAttachmentPicker">
+          <label class="button secondary attachment-upload-button">
             选择附件
-          </button>
+            <input ref="attachmentInput" class="file-picker-input" type="file" multiple @change="selectAttachments" />
+          </label>
           <div v-if="attachmentFiles.length" class="attachment-file-list">
             <div v-for="(file, index) in attachmentFiles" :key="file.name + file.size + file.lastModified" class="attachment-file">
               <span class="attachment-file-info">
