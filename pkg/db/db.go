@@ -170,6 +170,13 @@ CREATE TABLE IF NOT EXISTS app_settings (
 	if _, err := conn.Exec(schema); err != nil {
 		return err
 	}
+	if _, err := conn.Exec(`
+INSERT OR IGNORE INTO app_settings(key,value) VALUES
+  ('campaign_send_rate_per_minute','8'),
+  ('campaign_send_jitter_percent','35')
+`); err != nil {
+		return err
+	}
 	err = addColumns(conn, "tracking_mark_events", map[string]string{
 		"referer":         "TEXT NOT NULL DEFAULT ''",
 		"accept_language": "TEXT NOT NULL DEFAULT ''",

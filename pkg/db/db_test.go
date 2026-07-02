@@ -72,4 +72,24 @@ func TestMigrateCreatesCoreTablesAndIsIdempotent(t *testing.T) {
 	if !hasVariantID {
 		t.Fatal("expected campaign_recipients.variant_id to exist")
 	}
+
+	settings := map[string]string{}
+	settingRows, err := conn.Query(`SELECT key,value FROM app_settings WHERE key IN ('campaign_send_rate_per_minute','campaign_send_jitter_percent')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer settingRows.Close()
+	for settingRows.Next() {
+		var key, value string
+		if err := settingRows.Scan(&key, &value); err != nil {
+			t.Fatal(err)
+		}
+		settings[key] = value
+	}
+	if err := settingRows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if settings["campaign_send_rate_per_minute"] != "8" || settings["campaign_send_jitter_percent"] != "35" {
+		t.Fatalf("unexpected send rate defaults: %#v", settings)
+	}
 }

@@ -87,16 +87,55 @@ func TestLocalDataPathFollowsAbsoluteDBPath(t *testing.T) {
 	}
 }
 
-func TestCampaignSendDelayLimitsToTenPerMinute(t *testing.T) {
+func TestCampaignSendDelayUsesConfiguredRateAndJitter(t *testing.T) {
 	now := time.Date(2026, 6, 30, 10, 0, 0, 0, time.UTC)
-	if delay := campaignSendDelay(time.Time{}, now); delay != 0 {
+	settings := campaignSendSettings{RatePerMinute: 8, JitterPercent: 0}
+	if delay := campaignSendDelay(time.Time{}, now, settings, 0.5); delay != 0 {
 		t.Fatalf("first send should not wait, got %s", delay)
 	}
-	if delay := campaignSendDelay(now, now.Add(2*time.Second)); delay != 4*time.Second {
-		t.Fatalf("expected 4s remaining delay, got %s", delay)
+	if delay := campaignSendDelay(now, now.Add(2*time.Second), settings, 0.5); delay != 5500*time.Millisecond {
+		t.Fatalf("expected 5.5s remaining delay, got %s", delay)
 	}
-	if delay := campaignSendDelay(now, now.Add(6*time.Second)); delay != 0 {
+	if delay := campaignSendDelay(now, now.Add(7500*time.Millisecond), settings, 0.5); delay != 0 {
 		t.Fatalf("send at interval boundary should not wait, got %s", delay)
+	}
+
+	settings.JitterPercent = 20
+	if delay := campaignSendDelay(now, now, settings, 0); delay != 6*time.Second {
+		t.Fatalf("expected low jitter interval of 6s, got %s", delay)
+	}
+	if delay := campaignSendDelay(now, now, settings, 1); delay != 9*time.Second {
+		t.Fatalf("expected high jitter interval of 9s, got %s", delay)
+	}
+}
+
+func TestCampaignSendSettingsReadsDatabaseValues(t *testing.T) {
+	conn, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if _, err := conn.Exec(`CREATE TABLE app_settings(key TEXT PRIMARY KEY,value TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`INSERT INTO app_settings(key,value) VALUES('campaign_send_rate_per_minute','8'),('campaign_send_jitter_percent','35')`); err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{db: conn}
+	settings := server.campaignSendSettings()
+	if settings.RatePerMinute != 8 || settings.JitterPercent != 35 {
+		t.Fatalf("unexpected settings: %#v", settings)
+	}
+
+	if _, err := conn.Exec(`UPDATE app_settings SET value='999' WHERE key='campaign_send_rate_per_minute'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(`UPDATE app_settings SET value='bad' WHERE key='campaign_send_jitter_percent'`); err != nil {
+		t.Fatal(err)
+	}
+	settings = server.campaignSendSettings()
+	if settings.RatePerMinute != 120 || settings.JitterPercent != defaultCampaignSendJitterPercent {
+		t.Fatalf("expected clamped/fallback settings, got %#v", settings)
 	}
 }
 

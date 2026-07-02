@@ -11,6 +11,7 @@ import (
 	"html/template"
 	"io"
 	"io/fs"
+	"math/rand"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -44,7 +45,15 @@ type Server struct {
 
 var cloudHTTPClient = &http.Client{Timeout: 2500 * time.Millisecond}
 
-const campaignSendInterval = time.Minute / 10
+const (
+	defaultCampaignSendRatePerMinute = 8
+	defaultCampaignSendJitterPercent = 35
+)
+
+type campaignSendSettings struct {
+	RatePerMinute int
+	JitterPercent int
+}
 
 func New(db *sql.DB, frontend fs.FS) *gin.Engine {
 	return NewWithConfig(db, frontend, config.MustLoadDefault())
@@ -1084,6 +1093,7 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 		return
 	}
 	failed := 0
+	sendSettings := s.campaignSendSettings()
 	var lastSendAt time.Time
 	for _, target := range targets {
 		rec := target.recipient
@@ -1146,7 +1156,7 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 			body = s.appendAttachmentDownloadLinks(body, campaign.ID, rec.ID, attachments, baseURL, sourceToken, eventScope)
 		}
 		if err == nil {
-			waitForCampaignSendSlot(&lastSendAt)
+			waitForCampaignSendSlot(&lastSendAt, sendSettings)
 			err = sendMailWithTimeout(mb, rec.Email, rec.Name, subject, body, attachments, s.localDataPath("campaign-attachments"), 20*time.Second)
 		}
 		if err != nil {
@@ -1163,24 +1173,73 @@ func (s *Server) runCampaignSend(campaignID int64, baseURL, sourceToken string) 
 	_, _ = s.db.Exec(`UPDATE campaigns SET status=?,sent_at=COALESCE(sent_at,CURRENT_TIMESTAMP) WHERE id=?`, status, campaignID)
 }
 
-func waitForCampaignSendSlot(lastSendAt *time.Time) {
+func (s *Server) campaignSendSettings() campaignSendSettings {
+	return campaignSendSettings{
+		RatePerMinute: clampInt(s.appSettingInt("campaign_send_rate_per_minute", defaultCampaignSendRatePerMinute), 1, 120),
+		JitterPercent: clampInt(s.appSettingInt("campaign_send_jitter_percent", defaultCampaignSendJitterPercent), 0, 80),
+	}
+}
+
+func (s *Server) appSettingInt(key string, fallback int) int {
+	var raw string
+	err := s.db.QueryRow(`SELECT value FROM app_settings WHERE key=?`, key).Scan(&raw)
+	if err != nil {
+		return fallback
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+
+func clampInt(value, minValue, maxValue int) int {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
+}
+
+func waitForCampaignSendSlot(lastSendAt *time.Time, settings campaignSendSettings) {
 	now := time.Now()
-	if delay := campaignSendDelay(*lastSendAt, now); delay > 0 {
+	if delay := campaignSendDelay(*lastSendAt, now, settings, rand.Float64()); delay > 0 {
 		time.Sleep(delay)
 		now = time.Now()
 	}
 	*lastSendAt = now
 }
 
-func campaignSendDelay(lastSendAt, now time.Time) time.Duration {
+func campaignSendDelay(lastSendAt, now time.Time, settings campaignSendSettings, randomValue float64) time.Duration {
 	if lastSendAt.IsZero() {
 		return 0
 	}
-	nextSendAt := lastSendAt.Add(campaignSendInterval)
+	rate := clampInt(settings.RatePerMinute, 1, 120)
+	jitterPercent := clampInt(settings.JitterPercent, 0, 80)
+	baseInterval := time.Minute / time.Duration(rate)
+	jitterRange := float64(baseInterval) * float64(jitterPercent) / 100
+	jitter := time.Duration((clampFloat(randomValue, 0, 1)*2 - 1) * jitterRange)
+	interval := baseInterval + jitter
+	if interval < time.Second {
+		interval = time.Second
+	}
+	nextSendAt := lastSendAt.Add(interval)
 	if now.Before(nextSendAt) {
 		return nextSendAt.Sub(now)
 	}
 	return 0
+}
+
+func clampFloat(value, minValue, maxValue float64) float64 {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
 }
 
 type campaignVariant struct {
