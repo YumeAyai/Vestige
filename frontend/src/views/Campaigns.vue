@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { api } from '../services/api'
+import { formatDateTime } from '../utils/time'
 
 const router = useRouter()
 const route = useRoute()
@@ -14,6 +15,11 @@ const contactQuery = ref('')
 const bodyMode = ref('preview')
 const preview = ref({ subject: '', body_html: '' })
 const previewError = ref('')
+const attachmentInput = ref(null)
+const attachmentFiles = ref([])
+const attachmentLinkBackup = ref(false)
+const attachmentError = ref('')
+const creating = ref(false)
 const form = reactive({
   name: '',
   subject: '',
@@ -113,12 +119,40 @@ async function renderPreview() {
 }
 
 async function create() {
-  const result = await api.createCampaign({
-    ...form,
-    mailbox_id: Number(form.mailbox_id),
-    contact_ids: form.contact_ids.map(Number),
-  })
-  router.push(`/campaigns/${result.id}`)
+  creating.value = true
+  attachmentError.value = ''
+  try {
+    const attachmentIds = []
+    for (const file of attachmentFiles.value) {
+      const uploaded = await api.uploadCampaignAttachment(file, { linkBackup: attachmentLinkBackup.value })
+      attachmentIds.push(uploaded.id)
+    }
+    const result = await api.createCampaign({
+      ...form,
+      mailbox_id: Number(form.mailbox_id),
+      contact_ids: form.contact_ids.map(Number),
+      attachment_ids: attachmentIds,
+    })
+    router.push(`/campaigns/${result.id}`)
+  } catch (err) {
+    attachmentError.value = err.message
+  } finally {
+    creating.value = false
+  }
+}
+
+function selectAttachments(event) {
+  attachmentFiles.value = Array.from(event.target.files || [])
+  attachmentError.value = ''
+}
+
+function chooseAttachments() {
+  attachmentInput.value?.click()
+}
+
+function removeAttachment(index) {
+  attachmentFiles.value = attachmentFiles.value.filter((_, itemIndex) => itemIndex !== index)
+  if (attachmentInput.value) attachmentInput.value.value = ''
 }
 
 onMounted(load)
@@ -188,6 +222,34 @@ watch(
           <p v-if="previewError" class="notice error">{{ previewError }}</p>
         </div>
         <div class="field-block">
+          <div class="field-row">
+            <div>
+              <div class="field-label">附件</div>
+              <p class="muted">可直接夹带发送；勾选备用下载链接后，会额外生成可追踪下载入口。</p>
+            </div>
+            <label class="checkline">
+              <input v-model="attachmentLinkBackup" class="contact-check" type="checkbox" />
+              带备用下载链接
+            </label>
+          </div>
+          <button class="secondary attachment-upload-button" type="button" @click="chooseAttachments">
+            选择附件
+          </button>
+          <input ref="attachmentInput" type="file" multiple style="display:none" @change="selectAttachments" />
+          <div v-if="attachmentFiles.length" class="attachment-file-list">
+            <div v-for="(file, index) in attachmentFiles" :key="file.name + file.size + file.lastModified" class="attachment-file">
+              <span class="attachment-file-info">
+                <strong>{{ file.name }}</strong>
+                <small>{{ Math.ceil(file.size / 1024) }} KB</small>
+              </span>
+              <button type="button" class="attachment-remove" :aria-label="`移除 ${file.name}`" @click="removeAttachment(index)">
+                ×
+              </button>
+            </div>
+          </div>
+          <p v-if="attachmentError" class="notice error">{{ attachmentError }}</p>
+        </div>
+        <div class="field-block">
           <div class="field-label">收件人</div>
           <input v-model="contactQuery" placeholder="搜索公司、邮箱、电话或标签" />
           <div class="picker-list" role="listbox" aria-label="收件人列表" aria-multiselectable="true">
@@ -215,13 +277,7 @@ watch(
           </div>
           <p class="muted">已选择 {{ form.contact_ids.length }} 个收件人，系统会逐个单独发送。</p>
         </div>
-        <label
-          ><span
-            ><input v-model="form.tracking_enabled" type="checkbox" style="width: auto" />
-            开启阅读状态追踪</span
-          ></label
-        >
-        <button :disabled="!canCreate">创建任务</button>
+        <button :disabled="!canCreate || creating">{{ creating ? '创建中...' : '创建任务' }}</button>
       </form>
 
       <div class="panel">
@@ -242,7 +298,7 @@ watch(
               <td>
                 <span class="status" :class="item.status">{{ item.status }}</span>
               </td>
-              <td>{{ item.created_at }}</td>
+              <td>{{ formatDateTime(item.created_at) }}</td>
             </tr>
           </tbody>
         </table>

@@ -1,0 +1,117 @@
+name: Desktop Artifacts
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - dev
+      - "codex/**"
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      label:
+        description: Artifact label, for example desktop-20260611
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-desktop:
+    name: Build desktop DMG and EXE
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.12.0
+
+      - name: Resolve artifact version
+        id: meta
+        shell: bash
+        env:
+          INPUT_LABEL: ${{ github.event.inputs.label || '' }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME}"
+          elif [ -n "${INPUT_LABEL}" ]; then
+            version="${INPUT_LABEL}"
+          else
+            version="desktop-${GITHUB_SHA::7}"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Build macOS DMG
+        env:
+          VESTIGE_VERSION: ${{ steps.meta.outputs.version }}
+        run: sh scripts/build-desktop-dmg.sh
+
+      - name: Verify DMG
+        run: hdiutil verify dist/desktop-dmg/Jianji-darwin-arm64.dmg
+
+      - name: Build Windows EXE
+        env:
+          VESTIGE_VERSION: ${{ steps.meta.outputs.version }}
+        run: sh scripts/build-desktop-exe.sh
+
+      - name: Verify EXE header
+        run: |
+          set -euo pipefail
+          file dist/desktop-exe/Jianji-windows-amd64.exe
+          file dist/desktop-exe/Jianji-windows-amd64.exe | grep -q "PE32+ executable"
+
+      - name: Rename desktop artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist/desktop-artifacts
+          cp dist/desktop-dmg/Jianji-darwin-arm64.dmg "dist/desktop-artifacts/Jianji-darwin-arm64-${{ steps.meta.outputs.version }}.dmg"
+          cp dist/desktop-exe/Jianji-windows-amd64.exe "dist/desktop-artifacts/Jianji-windows-amd64-${{ steps.meta.outputs.version }}.exe"
+
+      - name: Upload macOS DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jianji-darwin-arm64-${{ steps.meta.outputs.version }}
+          path: dist/desktop-artifacts/Jianji-darwin-arm64-${{ steps.meta.outputs.version }}.dmg
+          if-no-files-found: error
+
+      - name: Upload Windows EXE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jianji-windows-amd64-${{ steps.meta.outputs.version }}
+          path: dist/desktop-artifacts/Jianji-windows-amd64-${{ steps.meta.outputs.version }}.exe
+          if-no-files-found: error
+
+      - name: Upload desktop release assets
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.version }}
+          files: |
+            dist/desktop-artifacts/Jianji-darwin-arm64-${{ steps.meta.outputs.version }}.dmg
+            dist/desktop-artifacts/Jianji-windows-amd64-${{ steps.meta.outputs.version }}.exe

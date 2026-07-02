@@ -6,11 +6,14 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	qrcode "github.com/skip2/go-qrcode"
 )
 
 var PixelGIF []byte
+
+const DeliverySecurityScanWindow = 5 * time.Second
 
 func init() {
 	PixelGIF, _ = base64.StdEncoding.DecodeString("R0lGODlhAQABAPAAAP///wAAACH5BAAAAAAALAAAAAABAAEAAAICRAEAOw==")
@@ -19,6 +22,7 @@ func init() {
 type Event struct {
 	TrackingID string
 	Kind       string
+	EventIndex string
 	Source     string
 	Campaign   string
 	Link       string
@@ -30,6 +34,7 @@ type Event struct {
 type MarkEvent struct {
 	Token          string
 	Kind           string
+	EventIndex     string
 	Source         string
 	IP             string
 	UserAgent      string
@@ -54,16 +59,19 @@ func NewSQLiteRecorder(db *sql.DB) SQLiteRecorder {
 
 func (r SQLiteRecorder) RecordOpen(event Event) error {
 	var recipientID int64
-	if err := r.db.QueryRow(`SELECT id FROM campaign_recipients WHERE tracking_id=?`, event.TrackingID).Scan(&recipientID); err != nil {
+	var sentAt string
+	if err := r.db.QueryRow(`SELECT id,COALESCE(sent_at,'') FROM campaign_recipients WHERE tracking_id=?`, event.TrackingID).Scan(&recipientID, &sentAt); err != nil {
 		return err
 	}
+	isPrefetch := LooksLikePrefetch(event.UserAgent) || LooksLikeDeliverySecurityScan(sentAt, time.Now())
 	_, err := r.db.Exec(
-		`INSERT INTO open_events(campaign_recipient_id,tracking_id,ip,user_agent,is_prefetch) VALUES(?,?,?,?,?)`,
+		`INSERT INTO open_events(campaign_recipient_id,tracking_id,event_index,ip,user_agent,is_prefetch) VALUES(?,?,?,?,?,?)`,
 		recipientID,
 		event.TrackingID,
+		event.EventIndex,
 		event.IP,
 		event.UserAgent,
-		LooksLikePrefetch(event.UserAgent),
+		isPrefetch,
 	)
 	if err != nil {
 		return err
@@ -78,7 +86,12 @@ func (r SQLiteRecorder) RecordOpen(event Event) error {
 func (r SQLiteRecorder) RecordMark(event MarkEvent) error {
 	var markID int64
 	var kind string
-	if err := r.db.QueryRow(`SELECT id,kind FROM tracking_marks WHERE token=?`, event.Token).Scan(&markID, &kind); err != nil {
+	var sentAt string
+	if err := r.db.QueryRow(`
+		SELECT tm.id,tm.kind,COALESCE(cr.sent_at,'')
+		FROM tracking_marks tm
+		JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id
+		WHERE tm.token=?`, event.Token).Scan(&markID, &kind, &sentAt); err != nil {
 		markID = 0
 		kind = event.Kind
 	}
@@ -87,17 +100,18 @@ func (r SQLiteRecorder) RecordMark(event MarkEvent) error {
 		source = "local"
 	}
 	_, err := r.db.Exec(
-		`INSERT INTO tracking_mark_events(mark_id,token,kind,source,ip,user_agent,referer,accept_language,forwarded_for,is_prefetch,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?)`,
+		`INSERT INTO tracking_mark_events(mark_id,token,kind,event_index,source,ip,user_agent,referer,accept_language,forwarded_for,is_prefetch,raw_payload) VALUES(NULLIF(?,0),?,?,?,?,?,?,?,?,?,?,?)`,
 		markID,
 		event.Token,
 		firstNonEmpty(kind, event.Kind),
+		event.EventIndex,
 		source,
 		event.IP,
 		event.UserAgent,
 		event.Referer,
 		event.AcceptLanguage,
 		event.ForwardedFor,
-		LooksLikePrefetch(event.UserAgent),
+		LooksLikePrefetch(event.UserAgent) || LooksLikeDeliverySecurityScan(sentAt, time.Now()),
 		event.Raw,
 	)
 	return err
@@ -108,13 +122,24 @@ func PixelURL(baseURL, trackingID string, campaignIDs ...string) string {
 }
 
 func PixelURLWithSource(baseURL, source, trackingID string, campaignIDs ...string) string {
+	eventIndex := ""
+	if len(campaignIDs) > 1 {
+		eventIndex = campaignIDs[1]
+	}
+	return PixelURLWithSourceAndIndex(baseURL, source, trackingID, firstVariadic(campaignIDs), eventIndex)
+}
+
+func PixelURLWithSourceAndIndex(baseURL, source, trackingID, campaignID, eventIndex string) string {
 	values := url.Values{}
 	values.Set("rid", trackingID)
 	if source != "" {
 		values.Set("s", source)
 	}
-	if len(campaignIDs) > 0 && campaignIDs[0] != "" {
-		values.Set("c", campaignIDs[0])
+	if campaignID != "" {
+		values.Set("c", campaignID)
+	}
+	if eventIndex != "" {
+		values.Set("i", eventIndex)
 	}
 	return strings.TrimRight(baseURL, "/") + "/p?" + values.Encode()
 }
@@ -124,6 +149,10 @@ func RedirectURL(baseURL, campaignID, linkID, trackingID, dest string) string {
 }
 
 func RedirectURLWithSource(baseURL, source, campaignID, linkID, trackingID, dest string) string {
+	return RedirectURLWithSourceAndIndex(baseURL, source, campaignID, linkID, trackingID, dest, linkID)
+}
+
+func RedirectURLWithSourceAndIndex(baseURL, source, campaignID, linkID, trackingID, dest, eventIndex string) string {
 	values := url.Values{}
 	if source != "" {
 		values.Set("s", source)
@@ -131,6 +160,9 @@ func RedirectURLWithSource(baseURL, source, campaignID, linkID, trackingID, dest
 	values.Set("c", campaignID)
 	values.Set("l", linkID)
 	values.Set("rid", trackingID)
+	if eventIndex != "" {
+		values.Set("i", eventIndex)
+	}
 	values.Set("dest", dest)
 	return strings.TrimRight(baseURL, "/") + "/r?" + values.Encode()
 }
@@ -140,15 +172,23 @@ func MarkImageURL(baseURL, token string, targets ...string) string {
 }
 
 func MarkImageURLWithSource(baseURL, source, token string, targets ...string) string {
+	return MarkImageURLWithSourceAndIndex(baseURL, source, token, "", targets...)
+}
+
+func MarkImageURLWithSourceAndIndex(baseURL, source, token, eventIndex string, targets ...string) string {
 	values := url.Values{}
 	values.Set("token", token)
+	values.Set("type", "qr")
 	if source != "" {
 		values.Set("s", source)
+	}
+	if eventIndex != "" {
+		values.Set("i", eventIndex)
 	}
 	if len(targets) > 0 && targets[0] != "" {
 		values.Set("target", targets[0])
 	}
-	return strings.TrimRight(baseURL, "/") + "/qrcode.png?" + values.Encode()
+	return strings.TrimRight(baseURL, "/") + "/img?" + values.Encode()
 }
 
 func AssetImageURL(baseURL, token, asset string) string {
@@ -156,13 +196,20 @@ func AssetImageURL(baseURL, token, asset string) string {
 }
 
 func AssetImageURLWithSource(baseURL, source, token, asset string) string {
+	return AssetImageURLWithSourceAndIndex(baseURL, source, token, asset, asset)
+}
+
+func AssetImageURLWithSourceAndIndex(baseURL, source, token, asset, eventIndex string) string {
 	values := url.Values{}
 	values.Set("token", token)
 	values.Set("asset", asset)
 	if source != "" {
 		values.Set("s", source)
 	}
-	return strings.TrimRight(baseURL, "/") + "/qrcode.png?" + values.Encode()
+	if eventIndex != "" {
+		values.Set("i", eventIndex)
+	}
+	return strings.TrimRight(baseURL, "/") + "/img?" + values.Encode()
 }
 
 func QRCodeHTML(baseURL, token string, targets ...string) string {
@@ -170,7 +217,11 @@ func QRCodeHTML(baseURL, token string, targets ...string) string {
 }
 
 func QRCodeHTMLWithSource(baseURL, source, token string, targets ...string) string {
-	return `<img src="` + MarkImageURLWithSource(baseURL, source, token, targets...) + `" width="132" height="132" alt="二维码" style="width:132px;height:132px;border:0" />`
+	return QRCodeHTMLWithSourceAndIndex(baseURL, source, token, "", targets...)
+}
+
+func QRCodeHTMLWithSourceAndIndex(baseURL, source, token, eventIndex string, targets ...string) string {
+	return `<img src="` + MarkImageURLWithSourceAndIndex(baseURL, source, token, eventIndex, targets...) + `" width="132" height="132" alt="二维码" style="width:132px;height:132px;border:0" />`
 }
 
 func TrackingImageHTML(baseURL, token, asset, alt string, width int) string {
@@ -178,13 +229,17 @@ func TrackingImageHTML(baseURL, token, asset, alt string, width int) string {
 }
 
 func TrackingImageHTMLWithSource(baseURL, source, token, asset, alt string, width int) string {
+	return TrackingImageHTMLWithSourceAndIndex(baseURL, source, token, asset, alt, width, asset)
+}
+
+func TrackingImageHTMLWithSourceAndIndex(baseURL, source, token, asset, alt string, width int, eventIndex string) string {
 	if width <= 0 {
 		width = 176
 	}
 	if alt == "" {
 		alt = "联系二维码"
 	}
-	return `<img src="` + AssetImageURLWithSource(baseURL, source, token, asset) + `" width="` + intString(width) + `" alt="` + templateEscape(alt) + `" style="width:` + intString(width) + `px;height:auto;border:0;display:block" />`
+	return `<img src="` + AssetImageURLWithSourceAndIndex(baseURL, source, token, asset, eventIndex) + `" width="` + intString(width) + `" alt="` + templateEscape(alt) + `" style="width:` + intString(width) + `px;height:auto;border:0;display:block" />`
 }
 
 func QRCodePNG(target string, size int) ([]byte, error) {
@@ -200,10 +255,26 @@ func InjectPixel(body, baseURL, trackingID string, campaignIDs ...string) string
 
 func InjectPixelWithSource(body, baseURL, source, trackingID string, campaignIDs ...string) string {
 	pixel := `<img src="` + PixelURLWithSource(baseURL, source, trackingID, campaignIDs...) + `" width="1" height="1" alt="" style="display:none;width:1px;height:1px;border:0" />`
+	return injectPixel(body, pixel)
+}
+
+func InjectPixelWithSourceAndIndex(body, baseURL, source, trackingID, campaignID, eventIndex string) string {
+	pixel := `<img src="` + PixelURLWithSourceAndIndex(baseURL, source, trackingID, campaignID, eventIndex) + `" width="1" height="1" alt="" style="display:none;width:1px;height:1px;border:0" />`
+	return injectPixel(body, pixel)
+}
+
+func injectPixel(body, pixel string) string {
 	if strings.Contains(strings.ToLower(body), "</body>") {
 		return strings.Replace(body, "</body>", pixel+"</body>", 1)
 	}
 	return body + pixel
+}
+
+func firstVariadic(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }
 
 func LooksLikePrefetch(userAgent string) bool {
@@ -218,6 +289,39 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func LooksLikeDeliverySecurityScan(sentAt string, eventAt time.Time) bool {
+	sent, ok := parseTime(sentAt)
+	if !ok || eventAt.IsZero() {
+		return false
+	}
+	diff := eventAt.Sub(sent)
+	return diff >= 0 && diff <= DeliverySecurityScanWindow
+}
+
+func ParseEventTime(value string) (time.Time, bool) {
+	return parseTime(value)
+}
+
+func parseTime(value string) (time.Time, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, false
+	}
+	layouts := []string{
+		time.RFC3339Nano,
+		time.RFC3339,
+		"2006-01-02 15:04:05.999999999-07:00",
+		"2006-01-02 15:04:05.999999999",
+		"2006-01-02 15:04:05",
+	}
+	for _, layout := range layouts {
+		if t, err := time.Parse(layout, value); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }
 
 func intString(value int) string {

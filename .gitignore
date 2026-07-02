@@ -2,7 +2,14 @@
 node_modules/
 .cache/
 data/
+dist/
+!backend/internal/webui/dist/
+!backend/internal/webui/dist/**
 *.db
 *.db-shm
 *.db-wal
 nous-mail
+/main
+/*.zip
+/tracking-server/scf_bootstrap
+backend/cmd/desktop/build/

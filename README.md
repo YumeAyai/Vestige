@@ -5,7 +5,7 @@
 它不把联系人、邮箱、模板、发送记录这些敏感数据放到云上，而是把系统拆成两部分：
 
 - **本地邮件系统**：用户自己运行，负责联系人、模板、发件邮箱、发送调度、统计导入与后续分析。
-- **匿名埋点云**：开放、轻量、无状态，负责接收邮件打开、链接点击、二维码加载等匿名事件。
+- **匿名埋点云**：开放、轻量、无状态，负责接收邮件打开、链接点击、图片加载等匿名事件。
 
 简单说，用户的数据留在用户本地；云端只留下“某个匿名 token 在某个时间触发了某类事件”的痕迹。这也是“见迹”这个名字的含义：只见行为痕迹，不见用户身份。
 
@@ -20,7 +20,7 @@
 匿名埋点云
   /p           打开像素
   /r           点击重定向
-  /qrcode.png  二维码图片加载
+  /img         图片埋点
   /api/stats   聚合统计
   /api/events  匿名事件拉取
         |
@@ -33,8 +33,8 @@
 ## 目录
 
 ```text
-local-backend           本地后端服务：API、发送、统计导入、前端 dist 嵌入
-tracking-server         匿名埋点服务：open/click/qrcode 事件收集与聚合
+backend                 本地后端服务：API、发送、统计导入、前端 dist 嵌入
+tracker                 匿名埋点服务：open/click/image 事件收集与聚合
 frontend                Vue 3 前端应用
 pkg                     两个 Go 服务共享的 db/model/tracker 基础包
 docs/tracking.md        埋点服务接口与集成契约
@@ -42,35 +42,36 @@ docs/tracking.md        埋点服务接口与集成契约
 
 ## 本地开发
 
-项目配置集中在 `config.yaml`，也可以用 `NOUSMAIL_CONFIG=/path/to/config.yaml` 指定其他配置文件。环境变量会覆盖 YAML 配置。
+项目配置集中在 `config.yaml`，也可以用 `VESTIGE_CONFIG=/path/to/config.yaml` 指定其他配置文件。环境变量会覆盖 YAML 配置。
 
 常用配置：
 
 ```yaml
-local_backend:
+client:
   addr: ":8080"
   db_path: "data/app.db"
   tracking_base_url: "https://xray-7g6vc4y2d2fc01be-1309857796.ap-shanghai.app.tcloudbase.com/jianji"
+  tracking_source_token: ""
+  qr_code_target_url: "https://example.com/survey"
 
-tracking_cloud:
-  addr: ":8081"
-  db_path: "data/tracking.db"
-
-frontend:
-  dev_port: 5173
-  api_proxy: "http://localhost:8080"
+scf:
+  tcb:
+    env_id: "xray-7g6vc4y2d2fc01be"
+    region: "ap-shanghai"
+    events_collection: "tracking_events"
+    assets_collection: "tracking_assets"
 ```
 
 启动本地邮件系统：
 
 ```bash
-go run ./local-backend/cmd/server
+go run ./backend/cmd/server
 ```
 
-启动匿名埋点云：
+本地调试匿名埋点云：
 
 ```bash
-go run ./tracking-server/cmd/server
+go run ./tracker/cmd/scf
 ```
 
 启动前端开发服务：
@@ -84,35 +85,47 @@ npm run dev
 默认地址：
 
 - 本地邮件系统：`http://localhost:8080`
-- 匿名埋点云：`http://localhost:8081`
+- 匿名埋点云：`https://xray-7g6vc4y2d2fc01be-1309857796.ap-shanghai.app.tcloudbase.com/jianji`
 - Vite 前端：`http://localhost:5173`
 
-开发模式下，本地邮件系统会读取 `config.yaml` 的 `local_backend.tracking_base_url`。如果临时覆盖埋点云地址，也可以启动前设置：
+## 构建交付
 
 ```bash
-TRACKING_BASE_URL=https://track.example.com go run ./local-backend/cmd/server
+sh scripts/build-app.sh
+sh scripts/build-tracker-function.sh
+```
+
+- `dist/app/vestige-linux-amd64`
+- `dist/app/vestige-linux-arm64`
+- `dist/app/vestige-windows-amd64.exe`
+- `dist/app/vestige-darwin-amd64`
+- `dist/app/vestige-darwin-arm64`
+- `dist/main`：云函数 Linux amd64 可执行文件
+- `dist/tracker.zip`：云函数部署包
+
+开发模式下，本地邮件系统会读取 `config.yaml` 的 `client.tracking_base_url`。如果临时覆盖埋点云地址，也可以启动前设置：
+
+```bash
+TRACKING_BASE_URL=https://track.example.com go run ./backend/cmd/server
 ```
 
 ## 生产构建
 
 ```bash
-cd frontend
-npm run build
-cd ..
-go build -o jianji-local ./local-backend/cmd/server
-go build -o jianji-tracking ./tracking-server/cmd/server
+sh scripts/build-app.sh
+sh scripts/build-tracker-function.sh
 ```
 
 运行本地邮件系统：
 
 ```bash
-./jianji-local
+./dist/app/vestige-darwin-arm64
 ```
 
-运行匿名埋点云：
+部署匿名埋点云：
 
 ```bash
-TRACKING_ADDR=:8081 TRACKING_DB_PATH=data/tracking.db ./jianji-tracking
+dist/tracker.zip
 ```
 
 ## 埋点 URL
@@ -131,10 +144,10 @@ TRACKING_ADDR=:8081 TRACKING_DB_PATH=data/tracking.db ./jianji-tracking
 </a>
 ```
 
-二维码图片：
+图片埋点：
 
 ```html
-<img src="https://track.example.com/qrcode.png?token=random-token&target=https%3A%2F%2Fexample.com%2Fsurvey" />
+<img src="https://track.example.com/img?type=qr&token=random-token&target=https%3A%2F%2Fexample.com%2Fsurvey" />
 ```
 
 详见 [docs/tracking.md](docs/tracking.md)。

@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "modernc.org/sqlite"
 )
 
 func Open(path string) (*sql.DB, error) {
@@ -13,7 +13,7 @@ func Open(path string) (*sql.DB, error) {
 		return nil, err
 	}
 
-	conn, err := sql.Open("sqlite3", path+"?_foreign_keys=on&_busy_timeout=5000")
+	conn, err := sql.Open("sqlite", path+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, err
 	}
@@ -88,13 +88,29 @@ CREATE TABLE IF NOT EXISTS campaign_recipients (
   FOREIGN KEY(contact_id) REFERENCES contacts(id)
 );
 
+CREATE TABLE IF NOT EXISTS campaign_attachments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  campaign_id INTEGER,
+  original_name TEXT NOT NULL,
+  stored_name TEXT NOT NULL,
+  content_type TEXT NOT NULL DEFAULT 'application/octet-stream',
+  size INTEGER NOT NULL DEFAULT 0,
+  link_backup INTEGER NOT NULL DEFAULT 0,
+  cloud_asset TEXT NOT NULL DEFAULT '',
+  cloud_url TEXT NOT NULL DEFAULT '',
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY(campaign_id) REFERENCES campaigns(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS open_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   campaign_recipient_id INTEGER NOT NULL,
   tracking_id TEXT NOT NULL,
+  event_index TEXT NOT NULL DEFAULT '',
   ip TEXT NOT NULL DEFAULT '',
   user_agent TEXT NOT NULL DEFAULT '',
   is_prefetch INTEGER NOT NULL DEFAULT 0,
+  ip_risk TEXT NOT NULL DEFAULT '',
   opened_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(campaign_recipient_id) REFERENCES campaign_recipients(id) ON DELETE CASCADE
 );
@@ -115,6 +131,7 @@ CREATE TABLE IF NOT EXISTS tracking_mark_events (
   mark_id INTEGER,
   token TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT '',
+  event_index TEXT NOT NULL DEFAULT '',
   source TEXT NOT NULL DEFAULT 'local',
   ip TEXT NOT NULL DEFAULT '',
   user_agent TEXT NOT NULL DEFAULT '',
@@ -122,6 +139,7 @@ CREATE TABLE IF NOT EXISTS tracking_mark_events (
   accept_language TEXT NOT NULL DEFAULT '',
   forwarded_for TEXT NOT NULL DEFAULT '',
   is_prefetch INTEGER NOT NULL DEFAULT 0,
+  ip_risk TEXT NOT NULL DEFAULT '',
   raw_payload TEXT NOT NULL DEFAULT '',
   triggered_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY(mark_id) REFERENCES tracking_marks(id) ON DELETE SET NULL
@@ -152,13 +170,28 @@ CREATE TABLE IF NOT EXISTS app_settings (
 	if _, err := conn.Exec(schema); err != nil {
 		return err
 	}
+	if _, err := conn.Exec(`
+INSERT OR IGNORE INTO app_settings(key,value) VALUES
+  ('campaign_send_rate_per_minute','8'),
+  ('campaign_send_jitter_percent','35')
+`); err != nil {
+		return err
+	}
 	err = addColumns(conn, "tracking_mark_events", map[string]string{
 		"referer":         "TEXT NOT NULL DEFAULT ''",
 		"accept_language": "TEXT NOT NULL DEFAULT ''",
 		"forwarded_for":   "TEXT NOT NULL DEFAULT ''",
+		"event_index":     "TEXT NOT NULL DEFAULT ''",
 		"is_prefetch":     "INTEGER NOT NULL DEFAULT 0",
+		"ip_risk":         "TEXT NOT NULL DEFAULT ''",
 	})
 	if err != nil {
+		return err
+	}
+	if err := addColumns(conn, "open_events", map[string]string{
+		"event_index": "TEXT NOT NULL DEFAULT ''",
+		"ip_risk":     "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
 		return err
 	}
 	if err := addColumns(conn, "templates", map[string]string{

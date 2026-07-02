@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
-    "serve": "go run ../local-backend/cmd/server"
+    "serve": "go run ../backend/cmd/server"
   },
   "dependencies": {
     "@vitejs/plugin-vue": "^5.2.1",

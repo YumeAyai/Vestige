@@ -1,0 +1,474 @@
+package handler
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"Vestige/tracker/internal/model"
+	"Vestige/tracker/internal/store"
+)
+
+type memoryStore struct {
+	mu     sync.Mutex
+	nextID int64
+	events []model.Event
+	assets map[string]model.Asset
+}
+
+func newMemoryStore() *memoryStore {
+	return &memoryStore{assets: map[string]model.Asset{}}
+}
+
+func (s *memoryStore) RecordEvent(_ context.Context, event model.Event) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextID++
+	event.ID = s.nextID
+	s.events = append(s.events, event)
+	return event.ID, nil
+}
+
+func (s *memoryStore) UpdateEventIPRisk(_ context.Context, id int64, ipRisk string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for index := range s.events {
+		if s.events[index].ID == id {
+			s.events[index].IPRisk = ipRisk
+			return nil
+		}
+	}
+	return nil
+}
+
+func (s *memoryStore) ListEvents(_ context.Context, filter model.EventFilter) ([]model.Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := []model.Event{}
+	for _, event := range s.events {
+		if filter.Source != "" && event.Source != filter.Source {
+			continue
+		}
+		if filter.Campaign != "" && event.Campaign != filter.Campaign {
+			continue
+		}
+		if filter.Kind != "" && event.Kind != filter.Kind {
+			continue
+		}
+		if filter.AfterID > 0 && event.ID <= filter.AfterID {
+			continue
+		}
+		items = append(items, event)
+		if filter.Limit > 0 && int64(len(items)) >= filter.Limit {
+			break
+		}
+	}
+	return items, nil
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
+
+func (s *memoryStore) Stats(ctx context.Context, filter model.EventFilter) (model.StatsResult, error) {
+	items, _ := s.ListEvents(ctx, filter)
+	byKind := map[string]int{}
+	for _, event := range items {
+		byKind[event.Kind]++
+	}
+	summary := []map[string]any{}
+	for kind, count := range byKind {
+		summary = append(summary, map[string]any{"kind": kind, "count": count, "unique_tokens": count})
+	}
+	return model.StatsResult{Summary: summary, Trend: []map[string]any{}}, nil
+}
+
+func (s *memoryStore) SaveAsset(_ context.Context, asset model.Asset) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.assets[asset.Name] = asset
+	return nil
+}
+
+func (s *memoryStore) GetAsset(_ context.Context, name string) (model.Asset, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	asset, ok := s.assets[name]
+	if !ok {
+		return model.Asset{}, store.ErrNotFound
+	}
+	return asset, nil
+}
+
+func TestPixelRecordsOpenEvent(t *testing.T) {
+	mem := newMemoryStore()
+	h := NewHandler(mem)
+	h.Now = func() time.Time { return time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC) }
+
+	resp, err := h.Handle(context.Background(), model.SCFEvent{
+		Method:      http.MethodGet,
+		Path:        "/jianji/p",
+		QueryString: "s=tenant&c=campaign&rid=token&i=variant%3A1%3Aopen",
+		Headers: map[string]string{
+			"user-agent":      "Mail",
+			"x-forwarded-for": "203.0.113.1, 10.0.0.1",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || !resp.IsBase64Encoded || resp.Headers["Content-Type"] != "image/gif" {
+		t.Fatalf("unexpected response: %#v", resp)
+	}
+	if len(mem.events) != 1 {
+		t.Fatalf("expected one event, got %#v", mem.events)
+	}
+	event := mem.events[0]
+	if event.Kind != "open" || event.Source != "tenant" || event.Campaign != "campaign" || event.Token != "token" {
+		t.Fatalf("unexpected event: %#v", event)
+	}
+	if event.EventIndex != "variant:1:open" || event.TriggeredAt != "2026-06-10T12:00:00Z" {
+		t.Fatalf("unexpected event metadata: %#v", event)
+	}
+	if event.IP != "203.0.113.1" || event.ForwardedFor != "203.0.113.1, 10.0.0.1" {
+		t.Fatalf("unexpected request environment: %#v", event)
+	}
+}
+
+func TestPixelDebugReturnsJSON(t *testing.T) {
+	mem := newMemoryStore()
+	resp, err := NewHandler(mem).Handle(context.Background(), model.SCFEvent{
+		Method:      http.MethodGet,
+		Path:        "/p",
+		QueryString: "s=tenant&c=campaign&rid=token&debug=1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || resp.Headers["Content-Type"] != "application/json" {
+		t.Fatalf("unexpected response: %#v", resp)
+	}
+	if !strings.Contains(resp.Body, `"ok":true`) || len(mem.events) != 1 {
+		t.Fatalf("unexpected debug result: body=%s events=%#v", resp.Body, mem.events)
+	}
+}
+
+func TestImageDoesNotRecordInvalidRequest(t *testing.T) {
+	mem := newMemoryStore()
+	h := NewHandler(mem)
+
+	resp, err := h.Handle(context.Background(), model.SCFEvent{
+		Method:      http.MethodGet,
+		Path:        "/img",
+		QueryString: "token=mark-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected bad request, got %#v", resp)
+	}
+	if len(mem.events) != 0 {
+		t.Fatalf("invalid image request should not record events: %#v", mem.events)
+	}
+}
+
+func TestImageAssetRecordsImageAfterLoad(t *testing.T) {
+	mem := newMemoryStore()
+	mem.assets["asset.png"] = model.Asset{Name: "asset.png", ContentType: "image/png", Data: []byte{0x89, 'P', 'N', 'G'}}
+	h := NewHandler(mem)
+
+	resp, err := h.Handle(context.Background(), model.SCFEvent{
+		Method:      http.MethodGet,
+		Path:        "/img",
+		QueryString: "asset=asset.png&token=mark-1&s=tenant&c=campaign&i=variant%3A1%3Aimage%3Aasset.png",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || resp.Headers["Content-Type"] != "image/png" {
+		t.Fatalf("unexpected image response: %#v", resp)
+	}
+	data, err := base64.StdEncoding.DecodeString(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(data, []byte{0x89, 'P', 'N', 'G'}) {
+		t.Fatalf("unexpected image body: %#v", data)
+	}
+	if len(mem.events) != 1 || mem.events[0].Kind != "image" || mem.events[0].Token != "mark-1" {
+		t.Fatalf("unexpected image event: %#v", mem.events)
+	}
+	raw, err := json.Marshal(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"isBase64Encoded":true`) || !strings.Contains(string(raw), `"Content-Type":"image/png"`) {
+		t.Fatalf("response must match API Gateway proxy shape: %s", raw)
+	}
+}
+
+func TestImageAssetDebugReturnsLookupError(t *testing.T) {
+	resp, err := NewHandler(newMemoryStore()).Handle(context.Background(), model.SCFEvent{
+		Method:      http.MethodGet,
+		Path:        "/img",
+		QueryString: "asset=missing.png&token=preview&debug=1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusNotFound || resp.Headers["Content-Type"] != "application/json" {
+		t.Fatalf("unexpected debug response: %#v", resp)
+	}
+	if !strings.Contains(resp.Body, `"asset":"missing.png"`) || !strings.Contains(resp.Body, "not found") {
+		t.Fatalf("unexpected debug body: %s", resp.Body)
+	}
+}
+
+func TestUploadAssetReturnsImgURL(t *testing.T) {
+	mem := newMemoryStore()
+	h := NewHandler(mem)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "qr.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte{0x89, 'P', 'N', 'G'}); err != nil {
+		t.Fatal(err)
+	}
+	_ = writer.WriteField("label", "联系图片")
+	_ = writer.WriteField("width", "160")
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := h.Handle(context.Background(), model.SCFEvent{
+		Method: http.MethodPost,
+		Path:   "/api/assets",
+		Headers: map[string]string{
+			"Content-Type":      writer.FormDataContentType(),
+			"Host":              "track.example.com",
+			"X-Forwarded-Proto": "https",
+		},
+		Body: body.String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected upload response: %#v", resp)
+	}
+	var payload struct {
+		Asset    string `json:"asset"`
+		ImageURL string `json:"image_url"`
+		HTML     string `json:"html"`
+	}
+	if err := json.Unmarshal([]byte(resp.Body), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Asset == "" || !strings.Contains(payload.ImageURL, "https://track.example.com/img?") {
+		t.Fatalf("unexpected upload payload: %#v", payload)
+	}
+	if !strings.Contains(payload.HTML, `/img?`) {
+		t.Fatalf("html should use /img: %s", payload.HTML)
+	}
+}
+
+func TestUploadAssetPreservesMountedSCFBaseURL(t *testing.T) {
+	mem := newMemoryStore()
+	h := NewHandler(mem)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "qr.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte{0x89, 'P', 'N', 'G'}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := h.Handle(context.Background(), model.SCFEvent{
+		Method: http.MethodPost,
+		Path:   "/jianji/api/assets",
+		Headers: map[string]string{
+			"Content-Type":      writer.FormDataContentType(),
+			"Host":              "track.example.com",
+			"X-Forwarded-Proto": "https",
+		},
+		Body: body.String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected upload response: %#v", resp)
+	}
+	var payload struct {
+		ImageURL string `json:"image_url"`
+		HTML     string `json:"html"`
+	}
+	if err := json.Unmarshal([]byte(resp.Body), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(payload.ImageURL, "https://track.example.com/jianji/img?") {
+		t.Fatalf("image_url should preserve mount prefix: %#v", payload)
+	}
+	if !strings.Contains(payload.HTML, `/jianji/img?`) {
+		t.Fatalf("html should preserve mount prefix: %s", payload.HTML)
+	}
+}
+
+func TestUploadAssetUsesConfiguredPublicBaseURL(t *testing.T) {
+	mem := newMemoryStore()
+	h := NewHandler(mem)
+	h.PublicBaseURL = "https://track.example.com/jianji"
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "qr.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := part.Write([]byte{0x89, 'P', 'N', 'G'}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := h.Handle(context.Background(), model.SCFEvent{
+		Method: http.MethodPost,
+		Path:   "/api/assets",
+		Headers: map[string]string{
+			"Content-Type":      writer.FormDataContentType(),
+			"Host":              "track.example.com",
+			"X-Forwarded-Proto": "https",
+		},
+		Body: body.String(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected upload response: %#v", resp)
+	}
+	var payload struct {
+		ImageURL string `json:"image_url"`
+		HTML     string `json:"html"`
+	}
+	if err := json.Unmarshal([]byte(resp.Body), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(payload.ImageURL, "https://track.example.com/jianji/img?") {
+		t.Fatalf("image_url should use configured public base URL: %#v", payload)
+	}
+	if !strings.Contains(payload.HTML, `/jianji/img?`) {
+		t.Fatalf("html should use configured public base URL: %s", payload.HTML)
+	}
+}
+
+func TestAssetsGetReturnsEndpointInfo(t *testing.T) {
+	resp, err := NewHandler(newMemoryStore()).Handle(context.Background(), model.SCFEvent{
+		Method: http.MethodGet,
+		Path:   "/api/assets",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("unexpected response: %#v", resp)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(resp.Body), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["ok"] != true || payload["method"] != "POST" {
+		t.Fatalf("unexpected payload: %#v", payload)
+	}
+}
+
+func TestFilterFromQueryDoesNotAcceptMongoObjects(t *testing.T) {
+	query := parseQuery(`s=%7B%22%24ne%22%3Anull%7D&kind=open&since=%7B%22%24gt%22%3Anull%7D&after_id[$gt]=1&after_id=42`)
+	filter := filterFromQuery(query, true)
+	if filter.Source != `{"$ne":null}` || filter.Kind != "open" {
+		t.Fatalf("unexpected scalar filter values: %#v", filter)
+	}
+	if filter.Since != "" {
+		t.Fatalf("invalid since should be ignored: %#v", filter)
+	}
+	if filter.AfterID != 42 {
+		t.Fatalf("after_id should only come from parsed scalar integer: %#v", filter)
+	}
+}
+
+func TestEventFromRequestSanitizesScalars(t *testing.T) {
+	query := parseQuery("s=tenant%00x&rid=token&i=index")
+	event := eventFromRequest(query, model.SCFEvent{}, "open", time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC))
+	if event.Source != "tenantx" || event.Token != "token" {
+		t.Fatalf("unexpected event: %#v", event)
+	}
+}
+
+func TestIPPortraitLookupUsesBaiduRefererAndSummarizes(t *testing.T) {
+	h := NewHandler(newMemoryStore())
+	h.IPHTTPClient = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != "https://qifu.baidu.com/api/v1/ip-portrait/brief-info?ip=183.193.43.145" {
+			t.Fatalf("unexpected query url: %s", req.URL.String())
+		}
+		referer := req.Header.Get("Referer")
+		if !strings.Contains(referer, "activeKey=SEARCH_IP") || !strings.Contains(referer, "activeId=SEARCH_IP_ADDRESS") || !strings.Contains(referer, "ip=183.193.43.145") {
+			t.Fatalf("unexpected referer: %s", referer)
+		}
+		body := strings.NewReader(`{
+			"code": 200,
+			"data": {
+				"country": "中国",
+				"province": "上海市",
+				"isp": "中国移动",
+				"scene": "家庭宽带",
+				"company": null,
+				"risk_score": "高",
+				"security_risks": {
+					"行为风险": [
+						{"label": "劫持代理IP", "subItems": ["劫持代理IP"]},
+						{"label": "代理IP", "subItems": ["代理IP"]}
+					],
+					"关联设备风险": [
+						{"label": "非正常设备IP", "subItems": ["疑似黑ROM设备IP"]}
+					]
+				},
+				"hit_risk_num": 3,
+				"query_ip": "183.193.43.145",
+				"version": "v4"
+			},
+			"message": "success"
+		}`)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(body),
+			Header:     make(http.Header),
+			Request:    req,
+		}, nil
+	})}
+
+	summary := h.lookupIPPortrait(context.Background(), "183.193.43.145")
+	for _, want := range []string{"风险高", "家庭宽带", "劫持代理IP", "代理IP", "疑似黑ROM设备IP"} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q: %s", want, summary)
+		}
+	}
+}

@@ -1,0 +1,145 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - dev
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      label:
+        description: Artifact label, for example test-20260610
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build-release:
+    name: Build release artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Resolve release version
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            version="${GITHUB_REF_NAME}"
+          elif [ "${GITHUB_REF_NAME}" = "dev" ]; then
+            version="dev-${GITHUB_SHA::7}"
+          elif [ -n "${{ inputs.label }}" ]; then
+            version="${{ inputs.label }}"
+          else
+            version="manual-$(date -u +%Y%m%d-%H%M%S)"
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Run Go tests
+        run: go test ./pkg/... ./backend/... ./tracker/...
+
+      - name: Build app distribution
+        env:
+          VESTIGE_VERSION: ${{ steps.meta.outputs.version }}
+        run: sh scripts/build-app.sh
+
+      - name: Package app distribution
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          zip -9 -r "vestige-app-${{ steps.meta.outputs.version }}.zip" app
+
+      - name: Build tracker function package
+        env:
+          TRACKER_VERSION: ${{ steps.meta.outputs.version }}
+        run: sh scripts/build-tracker-function.sh
+
+      - name: Version tracker package
+        run: cp dist/tracker.zip "dist/tracker-${{ steps.meta.outputs.version }}.zip"
+
+      - name: Upload linux amd64 artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-linux-amd64-${{ steps.meta.outputs.version }}
+          path: dist/app/vestige-linux-amd64
+          if-no-files-found: error
+
+      - name: Upload linux arm64 artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-linux-arm64-${{ steps.meta.outputs.version }}
+          path: dist/app/vestige-linux-arm64
+          if-no-files-found: error
+
+      - name: Upload windows amd64 artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-windows-amd64-${{ steps.meta.outputs.version }}
+          path: dist/app/vestige-windows-amd64.exe
+          if-no-files-found: error
+
+      - name: Upload darwin amd64 artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-darwin-amd64-${{ steps.meta.outputs.version }}
+          path: dist/app/vestige-darwin-amd64
+          if-no-files-found: error
+
+      - name: Upload darwin arm64 artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: vestige-darwin-arm64-${{ steps.meta.outputs.version }}
+          path: dist/app/vestige-darwin-arm64
+          if-no-files-found: error
+
+      - name: Upload tracker artifact
+        if: github.ref_type != 'tag'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tracker-${{ steps.meta.outputs.version }}
+          path: dist/tracker-${{ steps.meta.outputs.version }}.zip
+          if-no-files-found: error
+
+      - name: Upload release
+        if: github.ref_type == 'tag'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.version }}
+          target_commitish: ${{ github.sha }}
+          name: Vestige ${{ steps.meta.outputs.version }}
+          prerelease: false
+          make_latest: true
+          files: |
+            dist/vestige-app-${{ steps.meta.outputs.version }}.zip
+            dist/tracker-${{ steps.meta.outputs.version }}.zip

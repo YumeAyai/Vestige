@@ -5,9 +5,13 @@ on:
   push:
     branches:
       - main
+      - dev
 
 permissions:
   contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   test:
@@ -40,4 +44,3 @@ jobs:
 
       - name: Run Go tests
         run: go test ./...
-

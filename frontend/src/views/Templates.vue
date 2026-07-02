@@ -1,6 +1,8 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { api } from '../services/api'
+import { formatDateTime } from '../utils/time'
+import { askConfirm, askPrompt } from '../utils/dialog'
 
 const items = ref([])
 const preview = ref({ subject: '', body_html: '' })
@@ -8,6 +10,7 @@ const previewError = ref('')
 const saveMessage = ref('')
 const imageAsset = ref(null)
 const imageError = ref('')
+const linkError = ref('')
 const imageLoading = ref(false)
 const imageFile = ref(null)
 const bodyEditor = ref(null)
@@ -30,6 +33,11 @@ const sample = reactive({
 const imageForm = reactive({
   label: '企业微信图片',
   width: 176
+})
+const linkForm = reactive({
+  label: '官网链接',
+  url: 'https://example.com/survey',
+  text: '查看详情'
 })
 
 const canPreview = computed(() => form.subject || form.body_html)
@@ -84,7 +92,7 @@ function newTemplate() {
 }
 
 async function deleteTemplate(item) {
-  if (!window.confirm(`删除模板「${item.name}」？`)) return
+  if (!(await askConfirm(`删除模板「${item.name}」？`))) return
   await api.deleteTemplate(item.id)
   if (activeTemplateId.value === item.id) {
     newTemplate()
@@ -99,18 +107,13 @@ async function copyTemplate(item) {
 }
 
 async function renameTemplate(item) {
-  const name = window.prompt('模板新名称', item.name)
+  const name = await askPrompt('模板新名称', item.name)
   if (!name || name.trim() === item.name) return
   await api.updateTemplate(item.id, { ...item, name: name.trim() })
   if (activeTemplateId.value === item.id) {
     form.name = name.trim()
   }
   await load()
-}
-
-function formatTime(value) {
-  if (!value) return '-'
-  return value.replace('T', ' ').replace('Z', '').slice(0, 19)
 }
 
 async function renderPreview() {
@@ -193,6 +196,23 @@ function insertTrackingImagePlaceholder() {
   insertAtCursor(imageAsset.value.placeholder)
 }
 
+function quoteTemplateString(value) {
+  return JSON.stringify(String(value || '').trim())
+}
+
+function insertTrackingLink() {
+  const label = linkForm.label.trim() || '链接'
+  const url = linkForm.url.trim()
+  const text = linkForm.text.trim() || label
+  if (!url) {
+    linkError.value = '请填写链接埋点目标 URL。'
+    return
+  }
+  linkError.value = ''
+  const href = `{{TrackingLink ${quoteTemplateString(label)} ${quoteTemplateString(url)}}}`
+  insertAtCursor(`<a href="${href}">${text}</a>`)
+}
+
 watch(
   () => [form.subject, form.body_html, sample.name, sample.company, sample.email, sample.phone],
   renderPreview
@@ -232,6 +252,7 @@ onMounted(renderPreview)
           <button type="button" class="secondary" @click="insertVariable('{{.Department}}')">部门</button>
           <button type="button" class="secondary" @click="insertVariable('{{.Email}}')">邮箱</button>
           <button type="button" class="secondary" @click="insertTrackingImagePlaceholder">联系图片埋点</button>
+          <button type="button" class="secondary" @click="insertTrackingLink">链接埋点</button>
         </div>
 
         <label class="html-editor">
@@ -269,6 +290,20 @@ onMounted(renderPreview)
           </div>
         </div>
 
+        <div class="qr-tool">
+          <div>
+            <h2>链接埋点资源</h2>
+            <p class="muted">生成可插入正文的追踪链接；正式发送时每个收件人都会获得独立 click token，点击会计入链接追踪。</p>
+          </div>
+          <div class="qr-tool-grid link-tool-grid">
+            <label>链接名称<input v-model="linkForm.label" placeholder="例如：官网按钮" /></label>
+            <label>目标 URL<input v-model="linkForm.url" type="url" placeholder="https://example.com/survey" /></label>
+            <label>链接文字<input v-model="linkForm.text" placeholder="查看详情" /></label>
+            <button type="button" @click="insertTrackingLink">插入链接埋点</button>
+          </div>
+          <p v-if="linkError" class="notice error">{{ linkError }}</p>
+        </div>
+
         <p v-if="saveMessage" class="notice success">{{ saveMessage }}</p>
         <p v-if="previewError" class="notice error">{{ previewError }}</p>
       </form>
@@ -285,8 +320,32 @@ onMounted(renderPreview)
           <label>预览邮箱<input v-model="sample.email" /></label>
         </div>
         <div class="mail-preview">
-          <div class="mail-preview-subject">{{ preview.subject || '邮件主题预览' }}</div>
+          <div class="mail-reader-toolbar">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div class="mail-reader-header">
+            <p class="mail-reader-label">主题</p>
+            <h2>{{ preview.subject || '邮件主题预览' }}</h2>
+            <div class="mail-reader-meta">
+              <div>
+                <span>发件人</span>
+                <strong>见迹邮件助手 &lt;noreply@example.com&gt;</strong>
+              </div>
+              <div>
+                <span>收件人</span>
+                <strong>{{ sample.company || sample.email }} &lt;{{ sample.email }}&gt;</strong>
+              </div>
+              <div>
+                <span>时间</span>
+                <strong>刚刚</strong>
+              </div>
+            </div>
+          </div>
+          <div class="mail-reader-body">
           <iframe title="邮件 HTML 预览" :srcdoc="preview.body_html"></iframe>
+          </div>
         </div>
         <div class="tracking-summary">
           <h2>请求可采集信息</h2>
@@ -313,8 +372,8 @@ onMounted(renderPreview)
             <tr v-for="item in items" :key="item.id" :class="{ 'active-row': item.id === activeTemplateId }">
               <td>{{ item.name }}</td>
               <td>{{ item.subject }}</td>
-              <td>{{ formatTime(item.created_at) }}</td>
-              <td>{{ formatTime(item.updated_at) }}</td>
+              <td>{{ formatDateTime(item.created_at) }}</td>
+              <td>{{ formatDateTime(item.updated_at) }}</td>
               <td>
                 <div class="table-actions">
                   <button type="button" class="secondary" @click="openTemplate(item)">打开</button>

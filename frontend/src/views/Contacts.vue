@@ -2,16 +2,20 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../services/api'
+import { askConfirm } from '../utils/dialog'
+import { ImportContactsFromFileDialog } from '../../wailsjs/go/main/DesktopApp'
 
 const router = useRouter()
 const items = ref([])
 const importing = ref(false)
+const fileInput = ref(null)
 const total = ref(0)
 const offset = ref(0)
-const pageSize = ref(20)
+const pageSize = ref('20')
 const pageSizeOptions = [20, 50, 100, 200, 'all']
 const query = ref('')
 const selectedIds = ref([])
+const editingId = ref(null)
 const batch = reactive({ tags: '', notes: '' })
 const notice = ref('')
 const form = reactive({ name: '', email: '', company: '', department: '', phone: '', tags: '', notes: '' })
@@ -23,15 +27,17 @@ const columns = reactive([
   { key: 'phone', label: '联系电话', width: 150, min: 130 },
   { key: 'tags', label: '标签', width: 150, min: 120 },
   { key: 'notes', label: '备注', width: 240, min: 180 },
+  { key: 'actions', label: '操作', width: 110, min: 96 },
 ])
 
 let resizeState = null
 
 const pageStart = computed(() => (total.value === 0 ? 0 : offset.value + 1))
-const pageEnd = computed(() => Math.min(offset.value + pageSize.value, total.value))
+const effectivePageSize = computed(() => (pageSize.value === 'all' ? total.value : Number(pageSize.value)))
+const pageEnd = computed(() => Math.min(offset.value + effectivePageSize.value, total.value))
 const allPageSelected = computed(() => items.value.length > 0 && items.value.every((item) => selectedIds.value.includes(item.id)))
 const hasPrevious = computed(() => offset.value > 0)
-const hasNext = computed(() => offset.value + pageSize.value < total.value)
+const hasNext = computed(() => pageSize.value !== 'all' && offset.value + effectivePageSize.value < total.value)
 
 async function load() {
   const data = await loadContactPage()
@@ -46,10 +52,11 @@ async function loadContactPage() {
   } catch (error) {
     const all = await api.contacts()
     const filtered = filterContacts(all)
+    const limit = effectivePageSize.value || filtered.length
     return {
-      items: filtered.slice(offset.value, offset.value + pageSize.value),
+      items: filtered.slice(offset.value, offset.value + limit),
       total: filtered.length,
-      limit: pageSize.value,
+      limit,
       offset: offset.value,
     }
   }
@@ -63,25 +70,76 @@ function filterContacts(list) {
 }
 
 async function save() {
-  await api.createContact({
+  const payload = {
     ...form,
     name: form.name || form.company || form.email,
-  })
-  Object.assign(form, { name: '', email: '', company: '', department: '', phone: '', tags: '', notes: '' })
+  }
+  if (editingId.value) {
+    await api.updateContact(editingId.value, payload)
+    notice.value = '联系人已更新'
+  } else {
+    await api.createContact(payload)
+    notice.value = '联系人已新增'
+  }
+  resetForm()
   await load()
+}
+
+function resetForm() {
+  editingId.value = null
+  Object.assign(form, { name: '', email: '', company: '', department: '', phone: '', tags: '', notes: '' })
+}
+
+function editContact(item) {
+  editingId.value = item.id
+  Object.assign(form, {
+    name: item.name || '',
+    email: item.email || '',
+    company: item.company || '',
+    department: item.department || '',
+    phone: item.phone || '',
+    tags: item.tags || '',
+    notes: item.notes || '',
+  })
 }
 
 async function upload(event) {
   const file = event.target.files?.[0]
   if (!file) return
+  await importSelectedFile(file)
+  event.target.value = ''
+}
+
+async function importSelectedFile(file) {
   importing.value = true
   try {
-    await api.importContacts(file)
+    const result = await api.importContacts(file)
+    notice.value = `已导入 ${result.imported} 个联系人；跳过 ${result.skipped} 个`
     offset.value = 0
     await load()
   } finally {
     importing.value = false
-    event.target.value = ''
+  }
+}
+
+async function chooseImportFile() {
+  if (importing.value) return
+  if (!window.go?.main?.DesktopApp?.ImportContactsFromFileDialog) {
+    fileInput.value?.click()
+    return
+  }
+
+  importing.value = true
+  try {
+    const result = await ImportContactsFromFileDialog()
+    if (!result.imported && !result.skipped) return
+    notice.value = `已导入 ${result.imported} 个联系人；跳过 ${result.skipped} 个`
+    offset.value = 0
+    await load()
+  } catch (error) {
+    notice.value = error.message || String(error)
+  } finally {
+    importing.value = false
   }
 }
 
@@ -96,13 +154,18 @@ function getPageSizeLabel(size) {
 
 function previousPage() {
   if (!hasPrevious.value) return
-  offset.value = Math.max(0, offset.value - pageSize.value)
+  offset.value = Math.max(0, offset.value - effectivePageSize.value)
   load()
 }
 
 function nextPage() {
   if (!hasNext.value) return
-  offset.value += pageSize.value
+  offset.value += effectivePageSize.value
+  load()
+}
+
+function changePageSize() {
+  offset.value = 0
   load()
 }
 
@@ -138,7 +201,7 @@ async function applyBatchUpdate() {
 
 async function removeSelected() {
   if (selectedIds.value.length === 0) return
-  if (!confirm(`确认删除 ${selectedIds.value.length} 个未被任务使用的联系人？`)) return
+  if (!(await askConfirm(`确认删除 ${selectedIds.value.length} 个未被任务使用的联系人？`))) return
   const result = await api.deleteContactsBatch(selectedIds.value)
   notice.value = `已删除 ${result.deleted} 个联系人；已被邮件任务使用的联系人会保留`
   selectedIds.value = []
@@ -196,10 +259,10 @@ onMounted(load)
         <h1>联系人</h1>
         <p class="muted">支持导入 xlsx / csv；会自动识别“公司名、邮箱、联系电话、官网、行业、规模”等字段。</p>
       </div>
-      <label class="button secondary">
+      <button class="secondary" type="button" :disabled="importing" @click="chooseImportFile">
         导入名单
-        <input type="file" accept=".xlsx,.csv" style="display:none" :disabled="importing" @change="upload" />
-      </label>
+      </button>
+      <input ref="fileInput" type="file" accept=".xlsx,.csv" style="display:none" :disabled="importing" @change="upload" />
     </div>
     <div class="contact-actions">
       <input v-model="query" placeholder="搜索姓名、公司、邮箱、电话、标签或备注" @keydown.enter.prevent="search" />
@@ -208,12 +271,13 @@ onMounted(load)
     </div>
     <form class="panel grid five contact-form" @submit.prevent="save">
       <label>姓名<input v-model="form.name" /></label>
-      <label>公司名称<input v-model="form.company" required /></label>
-      <label>邮箱<input v-model="form.email" type="email" required /></label>
+      <label>公司名称<input v-model="form.company" /></label>
+      <label>邮箱<input v-model="form.email" required /></label>
       <label>手机号<input v-model="form.phone" /></label>
       <label>标签<input v-model="form.tags" /></label>
       <label>备注<input v-model="form.notes" /></label>
-      <button class="contact-submit">新增联系人</button>
+      <button class="contact-submit">{{ editingId ? '保存联系人' : '新增联系人' }}</button>
+      <button v-if="editingId" type="button" class="secondary contact-cancel" @click="resetForm">取消编辑</button>
     </form>
     <div class="panel contact-grid-card">
       <div class="bulk-bar">
@@ -265,6 +329,11 @@ onMounted(load)
               </td>
               <td>{{ item.tags }}</td>
               <td class="notes-cell">{{ item.notes }}</td>
+              <td>
+                <div class="table-actions">
+                  <button type="button" class="secondary" @click="editContact(item)">编辑</button>
+                </div>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -272,8 +341,8 @@ onMounted(load)
       <div class="pager">
         <span>{{ pageStart }}-{{ pageEnd }} / {{ total }}</span>
         <button class="secondary" :disabled="!hasPrevious" @click="previousPage">上一页</button>
-        <select v-model="pageSize" @change="offset = 0; load()">
-          <option v-for="size in pageSizeOptions" :key="size" :value="size === 'all' ? total : size">
+        <select v-model="pageSize" @change="changePageSize">
+          <option v-for="size in pageSizeOptions" :key="size" :value="String(size)">
             {{ getPageSizeLabel(size) }}
           </option>
         </select>

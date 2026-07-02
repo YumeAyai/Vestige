@@ -3,6 +3,8 @@ import * as echarts from 'echarts'
 import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { api } from '../services/api'
+import { formatDateTime, formatLocalHour } from '../utils/time'
+import { askConfirm } from '../utils/dialog'
 
 const route = useRoute()
 const campaign = ref(null)
@@ -40,9 +42,10 @@ const overviewMetrics = computed(() => {
   const total = summary.total || 0
   const sent = summary.sent || 0
   const failed = summary.failed || 0
+  const pending = summary.pending ?? Math.max(total - sent - failed - (summary.waiting || 0), 0)
+  const waiting = summary.waiting || 0
   const opened = summary.opened || 0
   const imageLoaded = summary.qr_loaded || 0
-  const pending = Math.max(total - sent - failed, 0)
   const uniqueClicks = summary.clicked ?? linkEngagement.value.uniqueClicks ?? 0
   const totalClicks = summary.click_events ?? linkEngagement.value.totalClicks ?? 0
   return {
@@ -50,6 +53,7 @@ const overviewMetrics = computed(() => {
     sent,
     failed,
     pending,
+    waiting,
     opened,
     imageLoaded,
     totalClicks,
@@ -63,18 +67,22 @@ const overviewMetrics = computed(() => {
 })
 
 const visibleRecipients = computed(() => {
-  if (filter.value === 'opened') return recipients.value.filter((item) => item.open_count > 0)
-  if (filter.value === 'qr_loaded') return recipients.value.filter((item) => item.qr_load_count > 0)
-  if (filter.value === 'qr_unloaded') return recipients.value.filter((item) => item.qr_load_count === 0)
-  if (filter.value === 'unopened') return recipients.value.filter((item) => item.open_count === 0)
+  if (filter.value === 'opened') return recipients.value.filter((item) => countValue(item.open_count) > 0)
+  if (filter.value === 'qr_loaded') return recipients.value.filter((item) => countValue(item.qr_load_count) > 0)
+  if (filter.value === 'qr_unloaded') return recipients.value.filter((item) => countValue(item.qr_load_count) === 0)
+  if (filter.value === 'unopened') return recipients.value.filter((item) => countValue(item.open_count) === 0)
+  if (filter.value === 'pending')
+    return recipients.value.filter((item) => item.send_status === 'pending')
+  if (filter.value === 'waiting')
+    return recipients.value.filter((item) => item.send_status === 'waiting')
   if (filter.value === 'failed')
     return recipients.value.filter((item) => item.send_status === 'failed')
   return recipients.value
 })
 
 const imageRecipients = computed(() => {
-  if (imageFilter.value === 'loaded') return recipients.value.filter((item) => item.qr_load_count > 0)
-  if (imageFilter.value === 'unloaded') return recipients.value.filter((item) => item.qr_load_count === 0)
+  if (imageFilter.value === 'loaded') return recipients.value.filter((item) => countValue(item.qr_load_count) > 0)
+  if (imageFilter.value === 'unloaded') return recipients.value.filter((item) => countValue(item.qr_load_count) === 0)
   if (imageFilter.value === 'prefetch') return recipients.value.filter((item) => item.last_qr_is_prefetch)
   return recipients.value
 })
@@ -118,6 +126,13 @@ function parseBrowser(ua) {
   return '其他'
 }
 
+function splitValues(value) {
+  return String(value || '')
+    .split(/[;；]/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 function formatSource(source) {
   if (source === 'cloud') return '远端'
   if (source === 'local') return '本地'
@@ -146,6 +161,42 @@ function formatPrefetch(value) {
   return value ? '疑似预加载' : '正常加载'
 }
 
+function countValue(value) {
+  const count = Number(value)
+  return Number.isFinite(count) && count >= 0 ? count : 0
+}
+
+function formatLoadCount(value) {
+  return countValue(value)
+}
+
+function isIPPortraitLoading(item) {
+  if (!item?.qr_load_count || !item.last_qr_ip) return false
+  return !String(item.last_qr_ip_risk || '').trim()
+}
+
+function formatIPType(item) {
+  if (!item?.qr_load_count) return '-'
+  const summary = String(item.last_qr_ip_risk || '').trim()
+  if (!summary) return item.last_qr_ip ? '查询中' : '-'
+  const parts = summary.split('/').map((part) => part.trim()).filter(Boolean)
+  if (parts.some((part) => part.includes('家庭宽带'))) return '家庭宽带'
+  if (parts.some((part) => part.includes('基站'))) return '基站'
+  if (parts.some((part) => part.includes('商业宽带') || part.includes('商用宽带') || part.includes('企业宽带') || part.includes('企业专线'))) return '商用宽带'
+  if (parts.some((part) => /机房|IDC|数据中心|云主机|云服务|服务器|托管/i.test(part))) return '机房/IDC'
+  if (parts.some((part) => /代理|VPN|CDN/i.test(part))) return '代理IP'
+  return parts.find((part) => !part.startsWith('风险')) || summary
+}
+
+function sendStatusLabel(status) {
+  return {
+    pending: '就绪',
+    waiting: '队列中',
+    sent: '已发送',
+    failed: '发送失败',
+  }[status] || status
+}
+
 function percent(count, total) {
   if (!total) return 0
   return Number(((count / total) * 100).toFixed(1))
@@ -153,19 +204,6 @@ function percent(count, total) {
 
 function formatPercent(value) {
   return `${Number(value || 0).toFixed(1)}%`
-}
-
-function pad(value) {
-  return String(value).padStart(2, '0')
-}
-
-function formatDateTime(value) {
-  if (!value) return '-'
-  const text = String(value).trim()
-  const normalized = text.includes('T') ? text : text.replace(' ', 'T')
-  const date = new Date(normalized)
-  if (Number.isNaN(date.getTime())) return text
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
 }
 
 async function load() {
@@ -215,9 +253,9 @@ async function loadLinkEngagement() {
 function renderChart() {
   if (!chartEl.value) return
   const chart = echarts.init(chartEl.value)
-  const { sent, failed, pending } = overviewMetrics.value
+  const { sent, failed, pending, waiting } = overviewMetrics.value
   chart.setOption({
-    color: ['#087f8c', '#d92d20', '#98a2b3'],
+    color: ['#067647', '#d92d20', '#667085', '#2563eb'],
     tooltip: { trigger: 'item' },
     legend: { bottom: 0, textStyle: { color: '#667085' } },
     xAxis: {
@@ -237,7 +275,8 @@ function renderChart() {
         data: [
           { name: '已发送', value: sent },
           { name: '失败', value: failed },
-          { name: '待发送', value: pending },
+          { name: '就绪', value: pending },
+          { name: '队列中', value: waiting },
         ],
       },
     ],
@@ -317,6 +356,7 @@ function renderEngagementTrend() {
   const pixelByHour = new Map((stats.value.trend || []).map((item) => [item.hour, item.count]))
   const imageByHour = new Map((stats.value.qr_trend || []).map((item) => [item.hour, item.count]))
   const clickByHour = new Map((linkEngagement.value.trend || []).map((item) => [item.hour, item.count]))
+  const hourLabels = hours.map(formatLocalHour)
   chart.setOption({
     color: ['#087f8c', '#3157a4', '#a16207'],
     grid: { left: 36, right: 18, top: 32, bottom: 42 },
@@ -324,7 +364,7 @@ function renderEngagementTrend() {
     legend: { top: 0, right: 8, textStyle: { color: '#667085' } },
     xAxis: {
       type: 'category',
-      data: hours,
+      data: hourLabels,
       axisLine: { lineStyle: { color: '#d9dee8' } },
       axisLabel: { color: '#667085', rotate: 35 },
     },
@@ -346,6 +386,7 @@ function renderImageChart() {
   if (!imageChartEl.value) return
   const chart = echarts.init(imageChartEl.value)
   const hours = stats.value.qr_trend?.map((item) => item.hour) || []
+  const hourLabels = hours.map(formatLocalHour)
   const data = stats.value.qr_trend?.map((item) => item.count) || []
   chart.setOption({
     color: ['#3157a4'],
@@ -353,7 +394,7 @@ function renderImageChart() {
     tooltip: { trigger: 'axis' },
     xAxis: {
       type: 'category',
-      data: hours,
+      data: hourLabels,
       axisLine: { lineStyle: { color: '#d9dee8' } },
       axisLabel: { color: '#667085', rotate: 45 },
     },
@@ -520,7 +561,7 @@ async function saveVariant() {
 
 async function removeVariant(item) {
   const variant = item.variant || item
-  if (!window.confirm(`删除变体「${variant.name}」？`)) return
+  if (!(await askConfirm(`删除变体「${variant.name}」？`))) return
   await api.deleteVariant(route.params.id, variant.id)
   if (editingVariantId.value === variant.id) resetVariantForm()
   await load()
@@ -577,7 +618,7 @@ watch(
 
     <!-- Overview Tab -->
     <template v-if="activeTab === 'overview'">
-      <div class="grid five">
+      <div class="overview-metrics">
         <div class="card metric">
           <strong>{{ overviewMetrics.total }}</strong>
           <span>收件人</span>
@@ -585,6 +626,14 @@ watch(
         <div class="card metric">
           <strong>{{ overviewMetrics.sent }}</strong>
           <span>已发送</span>
+        </div>
+        <div class="card metric">
+          <strong>{{ overviewMetrics.pending }}</strong>
+          <span>就绪</span>
+        </div>
+        <div class="card metric">
+          <strong>{{ overviewMetrics.waiting }}</strong>
+          <span>队列中</span>
         </div>
         <div class="card metric">
           <strong>{{ formatPercent(overviewMetrics.imageLoadRate) }}</strong>
@@ -635,6 +684,8 @@ watch(
             <option value="qr_unloaded">图片未加载</option>
             <option value="opened">像素已加载</option>
             <option value="unopened">像素未加载</option>
+            <option value="pending">就绪</option>
+            <option value="waiting">队列中</option>
             <option value="failed">发送失败</option>
           </select>
         </div>
@@ -649,6 +700,7 @@ watch(
               <th>最近图片加载</th>
               <th>来源判断</th>
               <th>最近 IP</th>
+              <th>IP类型</th>
               <th>预加载</th>
               <th>浏览器</th>
               <th>设备</th>
@@ -659,19 +711,33 @@ watch(
           <tbody>
             <tr v-for="item in visibleRecipients" :key="item.id">
               <td class="company-cell">{{ item.name }}</td>
-              <td><span class="data-chip tone-0">{{ item.email }}</span></td>
               <td>
-                <span class="status" :class="item.send_status">{{ item.send_status }}</span>
+                <div class="chip-list">
+                  <span v-for="(email, index) in splitValues(item.email)" :key="email" class="data-chip"
+                    :class="`tone-${index % 5}`">
+                    {{ email }}
+                  </span>
+                </div>
+              </td>
+              <td>
+                <span class="status" :class="item.send_status">{{ sendStatusLabel(item.send_status) }}</span>
               </td>
               <td>{{ item.qr_load_count }}</td>
               <td>{{ formatDateTime(item.first_qr_load_at) }}</td>
               <td>{{ formatDateTime(item.last_qr_load_at) }}</td>
               <td>{{ formatOrigin(item) }}</td>
               <td>{{ item.last_qr_ip || '-' }}</td>
+              <td :title="item.last_qr_ip_risk || (isIPPortraitLoading(item) ? '正在查询百度 IP 画像' : '')">
+                <span v-if="isIPPortraitLoading(item)" class="ip-type-loading">
+                  <span class="inline-spinner" aria-hidden="true"></span>
+                  查询中
+                </span>
+                <span v-else>{{ formatIPType(item) }}</span>
+              </td>
               <td>{{ item.qr_load_count > 0 ? formatPrefetch(item.last_qr_is_prefetch) : '-' }}</td>
               <td>{{ parseBrowser(item.last_qr_user_agent) }}</td>
               <td>{{ parseDevice(item.last_qr_user_agent) }}</td>
-              <td>{{ item.open_count }}</td>
+              <td>{{ formatLoadCount(item.open_count) }}</td>
               <td>{{ item.failure_reason }}</td>
             </tr>
           </tbody>
@@ -821,6 +887,7 @@ watch(
               <th>最近加载</th>
               <th>来源判断</th>
               <th>IP</th>
+              <th>IP类型</th>
               <th>预加载</th>
               <th>浏览器</th>
               <th>设备</th>
@@ -829,14 +896,28 @@ watch(
           <tbody>
             <tr v-for="item in imageRecipients" :key="item.id">
               <td class="company-cell">{{ item.name }}</td>
-              <td><span class="data-chip tone-0">{{ item.email }}</span></td>
-              <td><span class="status" :class="item.send_status">{{ item.send_status }}</span></td>
-              <td>{{ item.open_count }}</td>
-              <td>{{ item.qr_load_count }}</td>
+              <td>
+                <div class="chip-list">
+                  <span v-for="(email, index) in splitValues(item.email)" :key="email" class="data-chip"
+                    :class="`tone-${index % 5}`">
+                    {{ email }}
+                  </span>
+                </div>
+              </td>
+              <td><span class="status" :class="item.send_status">{{ sendStatusLabel(item.send_status) }}</span></td>
+              <td>{{ formatLoadCount(item.open_count) }}</td>
+              <td>{{ formatLoadCount(item.qr_load_count) }}</td>
               <td>{{ formatDateTime(item.first_qr_load_at) }}</td>
               <td>{{ formatDateTime(item.last_qr_load_at) }}</td>
               <td>{{ formatOrigin(item) }}</td>
               <td>{{ item.last_qr_ip || '-' }}</td>
+              <td :title="item.last_qr_ip_risk || (isIPPortraitLoading(item) ? '正在查询百度 IP 画像' : '')">
+                <span v-if="isIPPortraitLoading(item)" class="ip-type-loading">
+                  <span class="inline-spinner" aria-hidden="true"></span>
+                  查询中
+                </span>
+                <span v-else>{{ formatIPType(item) }}</span>
+              </td>
               <td>{{ item.qr_load_count > 0 ? formatPrefetch(item.last_qr_is_prefetch) : '-' }}</td>
               <td>{{ parseBrowser(item.last_qr_user_agent) }}</td>
               <td>{{ parseDevice(item.last_qr_user_agent) }}</td>

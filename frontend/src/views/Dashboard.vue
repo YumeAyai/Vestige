@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../services/api'
+import { formatDateTime } from '../utils/time'
 
 const campaigns = ref([])
 const contacts = ref([])
@@ -11,6 +12,7 @@ onMounted(async () => {
 })
 
 const completed = computed(() => campaigns.value.filter((item) => item.status === 'completed').length)
+const sending = computed(() => campaigns.value.filter((item) => item.status === 'sending').length)
 </script>
 
 <template>
@@ -25,9 +27,9 @@ const completed = computed(() => campaigns.value.filter((item) => item.status ==
 
     <div class="grid four">
       <div class="card metric"><strong>{{ campaigns.length }}</strong><span>邮件任务</span></div>
+      <div class="card metric"><strong>{{ sending }}</strong><span>发送中任务</span></div>
       <div class="card metric"><strong>{{ completed }}</strong><span>已完成任务</span></div>
       <div class="card metric"><strong>{{ contacts.length }}</strong><span>联系人</span></div>
-      <div class="card metric"><strong>CSV</strong><span>任务结果导出</span></div>
     </div>
 
     <div class="panel" style="margin-top: 16px">
@@ -46,7 +48,7 @@ const completed = computed(() => campaigns.value.filter((item) => item.status ==
             <td><RouterLink :to="`/campaigns/${item.id}`">{{ item.name }}</RouterLink></td>
             <td>{{ item.subject }}</td>
             <td><span class="status" :class="item.status">{{ item.status }}</span></td>
-            <td>{{ item.created_at }}</td>
+            <td>{{ formatDateTime(item.created_at) }}</td>
           </tr>
         </tbody>
       </table>
