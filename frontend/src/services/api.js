@@ -54,11 +54,6 @@ export const api = {
     form.append('link_backup', linkBackup ? 'true' : 'false')
     return request('/api/campaign-attachments', { method: 'POST', body: form })
   },
-  uploadCampaignAttachmentPath: (path, { linkBackup = false } = {}) => request('/api/campaign-attachments', {
-    method: 'POST',
-    headers: jsonHeaders,
-    body: JSON.stringify({ path, link_backup: linkBackup }),
-  }),
   campaign: (id) => request(`/api/campaigns/${id}`),
   campaignStats: (id) => request(`/api/campaigns/${id}/stats`),
   recipients: (id) => request(`/api/campaigns/${id}/recipients`),

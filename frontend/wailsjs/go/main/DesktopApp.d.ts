@@ -6,6 +6,4 @@ export function Health():Promise<Record<string, string>>;
 
 export function ImportContactsFromFileDialog():Promise<app.ContactImportResult>;
 
-export function SelectCampaignAttachmentFiles():Promise<Array<string>>;
-
 export function SelectContactImportFile():Promise<string>;

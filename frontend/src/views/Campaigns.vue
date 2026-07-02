@@ -1,7 +1,6 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { SelectCampaignAttachmentFiles } from '../../wailsjs/go/main/DesktopApp'
 import { api } from '../services/api'
 import { formatDateTime } from '../utils/time'
 
@@ -124,10 +123,8 @@ async function create() {
   attachmentError.value = ''
   try {
     const attachmentIds = []
-    for (const attachment of attachmentFiles.value) {
-      const uploaded = attachment.source === 'path'
-        ? await api.uploadCampaignAttachmentPath(attachment.path, { linkBackup: attachmentLinkBackup.value })
-        : await api.uploadCampaignAttachment(attachment.file, { linkBackup: attachmentLinkBackup.value })
+    for (const file of attachmentFiles.value) {
+      const uploaded = await api.uploadCampaignAttachment(file, { linkBackup: attachmentLinkBackup.value })
       attachmentIds.push(uploaded.id)
     }
     const result = await api.createCampaign({
@@ -145,48 +142,17 @@ async function create() {
 }
 
 function selectAttachments(event) {
-  attachmentFiles.value = Array.from(event.target.files || []).map((file) => ({
-    source: 'file',
-    file,
-    name: file.name,
-    size: file.size,
-    key: `file:${file.name}:${file.size}:${file.lastModified}`,
-  }))
+  attachmentFiles.value = Array.from(event.target.files || [])
   attachmentError.value = ''
 }
 
-async function chooseAttachments() {
-  if (window.go?.main?.DesktopApp?.SelectCampaignAttachmentFiles) {
-    try {
-      const paths = await SelectCampaignAttachmentFiles()
-      if (!paths?.length) return
-      attachmentFiles.value = paths.map((path) => ({
-        source: 'path',
-        path,
-        name: attachmentNameFromPath(path),
-        size: null,
-        key: `path:${path}`,
-      }))
-      attachmentError.value = ''
-    } catch (err) {
-      attachmentError.value = err.message || String(err)
-    }
-    return
-  }
+function chooseAttachments() {
   attachmentInput.value?.click()
 }
 
 function removeAttachment(index) {
   attachmentFiles.value = attachmentFiles.value.filter((_, itemIndex) => itemIndex !== index)
   if (attachmentInput.value) attachmentInput.value.value = ''
-}
-
-function attachmentNameFromPath(path) {
-  return String(path || '').split(/[\\/]/).filter(Boolean).pop() || 'attachment'
-}
-
-function attachmentSizeLabel(attachment) {
-  return attachment.size ? `${Math.ceil(attachment.size / 1024)} KB` : '本地文件'
 }
 
 onMounted(load)
@@ -271,10 +237,10 @@ watch(
           </button>
           <input ref="attachmentInput" type="file" multiple style="display:none" @change="selectAttachments" />
           <div v-if="attachmentFiles.length" class="attachment-file-list">
-            <div v-for="(file, index) in attachmentFiles" :key="file.key" class="attachment-file">
+            <div v-for="(file, index) in attachmentFiles" :key="file.name + file.size + file.lastModified" class="attachment-file">
               <span class="attachment-file-info">
                 <strong>{{ file.name }}</strong>
-                <small>{{ attachmentSizeLabel(file) }}</small>
+                <small>{{ Math.ceil(file.size / 1024) }} KB</small>
               </span>
               <button type="button" class="attachment-remove" :aria-label="`移除 ${file.name}`" @click="removeAttachment(index)">
                 ×

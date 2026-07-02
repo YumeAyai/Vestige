@@ -10,10 +10,6 @@ export function ImportContactsFromFileDialog() {
   return window['go']['main']['DesktopApp']['ImportContactsFromFileDialog']();
 }
 
-export function SelectCampaignAttachmentFiles() {
-  return window['go']['main']['DesktopApp']['SelectCampaignAttachmentFiles']();
-}
-
 export function SelectContactImportFile() {
   return window['go']['main']['DesktopApp']['SelectContactImportFile']();
 }

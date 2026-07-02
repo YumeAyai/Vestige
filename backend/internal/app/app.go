@@ -765,16 +765,7 @@ type createCampaignInput struct {
 	AttachmentIDs   []int64 `json:"attachment_ids"`
 }
 
-type campaignAttachmentPathInput struct {
-	Path       string `json:"path"`
-	LinkBackup bool   `json:"link_backup"`
-}
-
 func (s *Server) uploadCampaignAttachment(c *gin.Context) {
-	if strings.Contains(c.GetHeader("Content-Type"), "application/json") {
-		s.uploadCampaignAttachmentPath(c)
-		return
-	}
 	file, err := c.FormFile("file")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请上传附件"})
@@ -842,93 +833,6 @@ func (s *Server) uploadCampaignAttachment(c *gin.Context) {
 		"content_type":  contentType,
 		"size":          file.Size,
 		"link_backup":   linkBackup,
-		"cloud_asset":   cloudAsset,
-		"cloud_url":     cloudURL,
-	})
-}
-
-func (s *Server) uploadCampaignAttachmentPath(c *gin.Context) {
-	var input campaignAttachmentPathInput
-	if bind(c, &input) != nil {
-		return
-	}
-	sourcePath := strings.TrimSpace(input.Path)
-	if sourcePath == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "请上传附件"})
-		return
-	}
-	info, err := os.Stat(sourcePath)
-	if err != nil {
-		fail(c, err)
-		return
-	}
-	if info.IsDir() {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "附件不能是文件夹"})
-		return
-	}
-	if info.Size() <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "附件不能为空"})
-		return
-	}
-	if info.Size() > 20<<20 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "附件不能超过 20MB"})
-		return
-	}
-
-	originalName := filepath.Base(sourcePath)
-	if strings.TrimSpace(originalName) == "" {
-		originalName = "attachment"
-	}
-	ext := strings.ToLower(filepath.Ext(originalName))
-	storedName := uuid.NewString() + ext
-	dir := s.localDataPath("campaign-attachments")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		fail(c, err)
-		return
-	}
-	targetPath := filepath.Join(dir, storedName)
-	if err := copyFile(targetPath, sourcePath); err != nil {
-		fail(c, err)
-		return
-	}
-
-	contentType := firstNonEmpty(mime.TypeByExtension(ext), "application/octet-stream")
-	cloudAsset := ""
-	cloudURL := ""
-	if input.LinkBackup {
-		payload, err := forwardAssetPath(s.trackingBaseURL(c), sourcePath, originalName, 0, "attachment")
-		if err != nil {
-			fail(c, err)
-			return
-		}
-		cloudAsset, _ = payload["asset"].(string)
-		cloudURL, _ = payload["download_url"].(string)
-		if strings.TrimSpace(cloudURL) == "" {
-			fail(c, errors.New("云端附件未返回下载链接"))
-			return
-		}
-	}
-	res, err := s.db.Exec(
-		`INSERT INTO campaign_attachments(original_name,stored_name,content_type,size,link_backup,cloud_asset,cloud_url) VALUES(?,?,?,?,?,?,?)`,
-		originalName,
-		storedName,
-		contentType,
-		info.Size(),
-		input.LinkBackup,
-		cloudAsset,
-		cloudURL,
-	)
-	if err != nil {
-		fail(c, err)
-		return
-	}
-	id, _ := res.LastInsertId()
-	c.JSON(http.StatusCreated, gin.H{
-		"id":            id,
-		"original_name": originalName,
-		"content_type":  contentType,
-		"size":          info.Size(),
-		"link_backup":   input.LinkBackup,
 		"cloud_asset":   cloudAsset,
 		"cloud_url":     cloudURL,
 	})
@@ -2240,15 +2144,6 @@ func forwardAsset(baseURL string, file *multipart.FileHeader, label string, widt
 	return forwardAssetReader(baseURL, src, file.Filename, label, width, kind)
 }
 
-func forwardAssetPath(baseURL, path, label string, width int, kind string) (gin.H, error) {
-	src, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer src.Close()
-	return forwardAssetReader(baseURL, src, filepath.Base(path), label, width, kind)
-}
-
 func forwardAssetReader(baseURL string, src io.Reader, filename, label string, width int, kind string) (gin.H, error) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -2294,23 +2189,6 @@ func forwardAssetReader(baseURL string, src io.Reader, filename, label string, w
 		return nil, errors.New(res.Status)
 	}
 	return payload, nil
-}
-
-func copyFile(dst, src string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 // globalStats returns global tracking statistics
