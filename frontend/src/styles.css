@@ -577,12 +577,19 @@ label {
   width: fit-content;
 }
 
+.attachment-upload-button.disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
 .visually-hidden-file {
-  height: 1px;
+  cursor: pointer;
+  height: 100%;
+  inset: 0;
   opacity: 0;
   overflow: hidden;
   position: absolute;
-  width: 1px;
+  width: 100%;
 }
 
 .attachment-file-list {

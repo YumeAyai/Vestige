@@ -18,6 +18,7 @@ const previewError = ref('')
 const attachmentFiles = ref([])
 const attachmentLinkBackup = ref(false)
 const attachmentError = ref('')
+const attachmentUploading = ref(false)
 const creating = ref(false)
 const form = reactive({
   name: '',
@@ -121,19 +122,11 @@ async function create() {
   creating.value = true
   attachmentError.value = ''
   try {
-    const attachmentIds = []
-    for (const file of attachmentFiles.value) {
-      const uploaded = await api.uploadCampaignAttachment(file.blob, {
-        filename: file.name,
-        linkBackup: attachmentLinkBackup.value,
-      })
-      attachmentIds.push(uploaded.id)
-    }
     const result = await api.createCampaign({
       ...form,
       mailbox_id: Number(form.mailbox_id),
       contact_ids: form.contact_ids.map(Number),
-      attachment_ids: attachmentIds,
+      attachment_ids: attachmentFiles.value.map((file) => file.id),
     })
     router.push(`/campaigns/${result.id}`)
   } catch (err) {
@@ -145,24 +138,29 @@ async function create() {
 
 async function selectAttachments(event) {
   const selected = Array.from(event.currentTarget.files || [])
-  event.currentTarget.value = ''
   attachmentError.value = ''
+  attachmentFiles.value = []
+  attachmentUploading.value = true
   try {
-    attachmentFiles.value = await Promise.all(
-      selected.map(async (file) => ({
+    for (const file of selected) {
+      // Upload the native File while WebView2 still owns its authorized file handle.
+      const uploaded = await api.uploadCampaignAttachment(file, {
+        filename: file.name,
+        linkBackup: attachmentLinkBackup.value,
+      })
+      attachmentFiles.value = [...attachmentFiles.value, {
+        ...uploaded,
         name: file.name,
         size: file.size,
-        type: file.type,
         lastModified: file.lastModified,
-        // WebView2 may release the native file handle before the campaign is submitted.
-        blob: new Blob([await file.arrayBuffer()], {
-          type: file.type || 'application/octet-stream',
-        }),
-      })),
-    )
+      }]
+    }
   } catch (err) {
     attachmentFiles.value = []
-    attachmentError.value = `读取附件失败：${err.message}`
+    attachmentError.value = err.message
+  } finally {
+    event.currentTarget.value = ''
+    attachmentUploading.value = false
   }
 }
 
@@ -243,13 +241,24 @@ watch(
               <p class="muted">可直接夹带发送；勾选备用下载链接后，会额外生成可追踪下载入口。</p>
             </div>
             <label class="checkline">
-              <input v-model="attachmentLinkBackup" class="contact-check" type="checkbox" />
+              <input
+                v-model="attachmentLinkBackup"
+                class="contact-check"
+                type="checkbox"
+                :disabled="attachmentUploading || attachmentFiles.length > 0"
+              />
               带备用下载链接
             </label>
           </div>
-          <label class="button secondary attachment-upload-button">
-            选择附件
-            <input type="file" multiple class="visually-hidden-file" @change="selectAttachments" />
+          <label class="button secondary attachment-upload-button" :class="{ disabled: attachmentUploading }">
+            {{ attachmentUploading ? '上传中...' : '选择附件' }}
+            <input
+              type="file"
+              multiple
+              class="visually-hidden-file"
+              :disabled="attachmentUploading"
+              @change="selectAttachments"
+            />
           </label>
           <div v-if="attachmentFiles.length" class="attachment-file-list">
             <div v-for="(file, index) in attachmentFiles" :key="file.name + file.size + file.lastModified" class="attachment-file">
@@ -292,7 +301,9 @@ watch(
           </div>
           <p class="muted">已选择 {{ form.contact_ids.length }} 个收件人，系统会逐个单独发送。</p>
         </div>
-        <button :disabled="!canCreate || creating">{{ creating ? '创建中...' : '创建任务' }}</button>
+        <button :disabled="!canCreate || creating || attachmentUploading">
+          {{ creating ? '创建中...' : '创建任务' }}
+        </button>
       </form>
 
       <div class="panel">
