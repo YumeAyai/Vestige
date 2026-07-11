@@ -137,7 +137,8 @@ async function create() {
 }
 
 async function selectAttachments(event) {
-  const selected = Array.from(event.currentTarget.files || [])
+  const input = event.currentTarget
+  const selected = Array.from(input.files || [])
   attachmentError.value = ''
   attachmentFiles.value = []
   attachmentUploading.value = true
@@ -162,7 +163,7 @@ async function selectAttachments(event) {
       .join('、')
     attachmentError.value = `附件上传失败：${fileSummary}；${err.message}`
   } finally {
-    event.currentTarget.value = ''
+    input.value = ''
     attachmentUploading.value = false
   }
 }
