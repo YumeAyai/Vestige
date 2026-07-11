@@ -50,7 +50,10 @@ export const api = {
   createCampaign: (data) => request('/api/campaigns', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
   uploadCampaignAttachment: (file, { filename = '', linkBackup = false } = {}) => {
     const form = new FormData()
-    form.append('file', file, filename || file.name || 'attachment')
+    const originalName = filename || file.name || 'attachment'
+    const extension = originalName.match(/\.[a-zA-Z0-9]{1,10}$/)?.[0] || ''
+    form.append('file', file, `attachment${extension}`)
+    form.append('original_name', originalName)
     form.append('link_backup', linkBackup ? 'true' : 'false')
     return request('/api/campaign-attachments', { method: 'POST', body: form })
   },

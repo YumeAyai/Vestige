@@ -783,7 +783,10 @@ func (s *Server) uploadCampaignAttachment(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "附件不能超过 20MB"})
 		return
 	}
-	originalName := filepath.Base(file.Filename)
+	originalName := filepath.Base(strings.TrimSpace(c.PostForm("original_name")))
+	if originalName == "." || originalName == string(filepath.Separator) || strings.TrimSpace(originalName) == "" {
+		originalName = filepath.Base(file.Filename)
+	}
 	if originalName == "." || originalName == string(filepath.Separator) || strings.TrimSpace(originalName) == "" {
 		originalName = "attachment"
 	}
