@@ -573,7 +573,16 @@ label {
 }
 
 .attachment-upload-button {
+  position: relative;
   width: fit-content;
+}
+
+.visually-hidden-file {
+  height: 1px;
+  opacity: 0;
+  overflow: hidden;
+  position: absolute;
+  width: 1px;
 }
 
 .attachment-file-list {

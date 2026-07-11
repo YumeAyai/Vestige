@@ -15,7 +15,6 @@ const contactQuery = ref('')
 const bodyMode = ref('preview')
 const preview = ref({ subject: '', body_html: '' })
 const previewError = ref('')
-const attachmentInput = ref(null)
 const attachmentFiles = ref([])
 const attachmentLinkBackup = ref(false)
 const attachmentError = ref('')
@@ -124,7 +123,10 @@ async function create() {
   try {
     const attachmentIds = []
     for (const file of attachmentFiles.value) {
-      const uploaded = await api.uploadCampaignAttachment(file, { linkBackup: attachmentLinkBackup.value })
+      const uploaded = await api.uploadCampaignAttachment(file.blob, {
+        filename: file.name,
+        linkBackup: attachmentLinkBackup.value,
+      })
       attachmentIds.push(uploaded.id)
     }
     const result = await api.createCampaign({
@@ -141,18 +143,31 @@ async function create() {
   }
 }
 
-function selectAttachments(event) {
-  attachmentFiles.value = Array.from(event.target.files || [])
+async function selectAttachments(event) {
+  const selected = Array.from(event.currentTarget.files || [])
+  event.currentTarget.value = ''
   attachmentError.value = ''
-}
-
-function chooseAttachments() {
-  attachmentInput.value?.click()
+  try {
+    attachmentFiles.value = await Promise.all(
+      selected.map(async (file) => ({
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        lastModified: file.lastModified,
+        // WebView2 may release the native file handle before the campaign is submitted.
+        blob: new Blob([await file.arrayBuffer()], {
+          type: file.type || 'application/octet-stream',
+        }),
+      })),
+    )
+  } catch (err) {
+    attachmentFiles.value = []
+    attachmentError.value = `读取附件失败：${err.message}`
+  }
 }
 
 function removeAttachment(index) {
   attachmentFiles.value = attachmentFiles.value.filter((_, itemIndex) => itemIndex !== index)
-  if (attachmentInput.value) attachmentInput.value.value = ''
 }
 
 onMounted(load)
@@ -232,10 +247,10 @@ watch(
               带备用下载链接
             </label>
           </div>
-          <button class="secondary attachment-upload-button" type="button" @click="chooseAttachments">
+          <label class="button secondary attachment-upload-button">
             选择附件
-          </button>
-          <input ref="attachmentInput" type="file" multiple style="display:none" @change="selectAttachments" />
+            <input type="file" multiple class="visually-hidden-file" @change="selectAttachments" />
+          </label>
           <div v-if="attachmentFiles.length" class="attachment-file-list">
             <div v-for="(file, index) in attachmentFiles" :key="file.name + file.size + file.lastModified" class="attachment-file">
               <span class="attachment-file-info">

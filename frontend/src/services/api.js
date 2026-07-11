@@ -48,9 +48,9 @@ export const api = {
   },
   campaigns: () => request('/api/campaigns'),
   createCampaign: (data) => request('/api/campaigns', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
-  uploadCampaignAttachment: (file, { linkBackup = false } = {}) => {
+  uploadCampaignAttachment: (file, { filename = '', linkBackup = false } = {}) => {
     const form = new FormData()
-    form.append('file', file)
+    form.append('file', file, filename || file.name || 'attachment')
     form.append('link_backup', linkBackup ? 'true' : 'false')
     return request('/api/campaign-attachments', { method: 'POST', body: form })
   },
