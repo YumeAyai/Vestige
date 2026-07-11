@@ -766,7 +766,33 @@ type createCampaignInput struct {
 	AttachmentIDs   []int64 `json:"attachment_ids"`
 }
 
+type uploadCampaignAttachmentInput struct {
+	OriginalName  string `json:"original_name"`
+	ContentType   string `json:"content_type"`
+	ContentBase64 string `json:"content_base64"`
+	LinkBackup    bool   `json:"link_backup"`
+}
+
 func (s *Server) uploadCampaignAttachment(c *gin.Context) {
+	if strings.Contains(strings.ToLower(c.GetHeader("Content-Type")), "application/json") {
+		var input uploadCampaignAttachmentInput
+		if bind(c, &input) != nil {
+			return
+		}
+		if len(input.ContentBase64) > ((20<<20)+2)/3*4+4 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "附件不能超过 20MB"})
+			return
+		}
+		data, err := base64.StdEncoding.DecodeString(input.ContentBase64)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "附件内容编码无效"})
+			return
+		}
+		log.Printf("campaign attachment received as JSON: filename=%q size=%d content_type=%q", input.OriginalName, len(data), input.ContentType)
+		s.saveCampaignAttachment(c, input.OriginalName, input.ContentType, data, input.LinkBackup)
+		return
+	}
+
 	file, err := c.FormFile("file")
 	if err != nil {
 		log.Printf("campaign attachment rejected: form file missing: content_type=%q content_length=%d err=%v", c.GetHeader("Content-Type"), c.Request.ContentLength, err)
@@ -774,21 +800,42 @@ func (s *Server) uploadCampaignAttachment(c *gin.Context) {
 		return
 	}
 	log.Printf("campaign attachment received: filename=%q size=%d content_type=%q request_length=%d", file.Filename, file.Size, file.Header.Get("Content-Type"), c.Request.ContentLength)
-	if file.Size <= 0 {
-		log.Printf("campaign attachment rejected: empty file: filename=%q", file.Filename)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "附件不能为空"})
-		return
-	}
-	if file.Size > 20<<20 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "附件不能超过 20MB"})
-		return
-	}
 	originalName := filepath.Base(strings.TrimSpace(c.PostForm("original_name")))
 	if originalName == "." || originalName == string(filepath.Separator) || strings.TrimSpace(originalName) == "" {
 		originalName = filepath.Base(file.Filename)
 	}
 	if originalName == "." || originalName == string(filepath.Separator) || strings.TrimSpace(originalName) == "" {
 		originalName = "attachment"
+	}
+	src, err := file.Open()
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	defer src.Close()
+	data, err := io.ReadAll(io.LimitReader(src, (20<<20)+1))
+	if err != nil {
+		fail(c, err)
+		return
+	}
+	contentType := firstNonEmpty(file.Header.Get("Content-Type"), mime.TypeByExtension(filepath.Ext(originalName)), "application/octet-stream")
+	linkBackup := strings.EqualFold(c.PostForm("link_backup"), "true") || c.PostForm("link_backup") == "1"
+	s.saveCampaignAttachment(c, originalName, contentType, data, linkBackup)
+}
+
+func (s *Server) saveCampaignAttachment(c *gin.Context, originalName, contentType string, data []byte, linkBackup bool) {
+	originalName = filepath.Base(strings.TrimSpace(originalName))
+	if originalName == "." || originalName == string(filepath.Separator) || originalName == "" {
+		originalName = "attachment"
+	}
+	if len(data) == 0 {
+		log.Printf("campaign attachment rejected: empty file: filename=%q", originalName)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "附件不能为空"})
+		return
+	}
+	if len(data) > 20<<20 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "附件不能超过 20MB"})
+		return
 	}
 	ext := strings.ToLower(filepath.Ext(originalName))
 	storedName := uuid.NewString() + ext
@@ -798,16 +845,15 @@ func (s *Server) uploadCampaignAttachment(c *gin.Context) {
 		return
 	}
 	path := filepath.Join(dir, storedName)
-	if err := c.SaveUploadedFile(file, path); err != nil {
+	if err := os.WriteFile(path, data, 0o644); err != nil {
 		fail(c, err)
 		return
 	}
-	contentType := firstNonEmpty(file.Header.Get("Content-Type"), mime.TypeByExtension(ext), "application/octet-stream")
-	linkBackup := strings.EqualFold(c.PostForm("link_backup"), "true") || c.PostForm("link_backup") == "1"
+	contentType = firstNonEmpty(contentType, mime.TypeByExtension(ext), "application/octet-stream")
 	cloudAsset := ""
 	cloudURL := ""
 	if linkBackup {
-		payload, err := forwardAsset(s.trackingBaseURL(c), file, originalName, 0, "attachment")
+		payload, err := forwardAssetReader(s.trackingBaseURL(c), bytes.NewReader(data), originalName, originalName, 0, "attachment")
 		if err != nil {
 			fail(c, err)
 			return
@@ -824,7 +870,7 @@ func (s *Server) uploadCampaignAttachment(c *gin.Context) {
 		originalName,
 		storedName,
 		contentType,
-		file.Size,
+		len(data),
 		linkBackup,
 		cloudAsset,
 		cloudURL,
@@ -838,7 +884,7 @@ func (s *Server) uploadCampaignAttachment(c *gin.Context) {
 		"id":            id,
 		"original_name": originalName,
 		"content_type":  contentType,
-		"size":          file.Size,
+		"size":          len(data),
 		"link_backup":   linkBackup,
 		"cloud_asset":   cloudAsset,
 		"cloud_url":     cloudURL,

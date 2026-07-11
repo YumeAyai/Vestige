@@ -12,6 +12,15 @@ async function request(path, options = {}) {
   return JSON.parse(text)
 }
 
+function fileAsBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onerror = () => reject(reader.error || new Error('读取附件失败'))
+    reader.onload = () => resolve(String(reader.result || '').split(',', 2)[1] || '')
+    reader.readAsDataURL(file)
+  })
+}
+
 export const api = {
   mailboxes: () => request('/api/mailboxes'),
   createMailbox: (data) => request('/api/mailboxes', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
@@ -48,14 +57,18 @@ export const api = {
   },
   campaigns: () => request('/api/campaigns'),
   createCampaign: (data) => request('/api/campaigns', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(data) }),
-  uploadCampaignAttachment: (file, { filename = '', linkBackup = false } = {}) => {
-    const form = new FormData()
+  uploadCampaignAttachment: async (file, { filename = '', linkBackup = false } = {}) => {
     const originalName = filename || file.name || 'attachment'
-    const extension = originalName.match(/\.[a-zA-Z0-9]{1,10}$/)?.[0] || ''
-    form.append('file', file, `attachment${extension}`)
-    form.append('original_name', originalName)
-    form.append('link_backup', linkBackup ? 'true' : 'false')
-    return request('/api/campaign-attachments', { method: 'POST', body: form })
+    return request('/api/campaign-attachments', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        original_name: originalName,
+        content_type: file.type || 'application/octet-stream',
+        content_base64: await fileAsBase64(file),
+        link_backup: linkBackup,
+      }),
+    })
   },
   campaign: (id) => request(`/api/campaigns/${id}`),
   campaignStats: (id) => request(`/api/campaigns/${id}/stats`),
