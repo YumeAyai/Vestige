@@ -157,7 +157,10 @@ async function selectAttachments(event) {
     }
   } catch (err) {
     attachmentFiles.value = []
-    attachmentError.value = err.message
+    const fileSummary = selected
+      .map((file) => `${file.name}（${file.size} 字节）`)
+      .join('、')
+    attachmentError.value = `附件上传失败：${fileSummary}；${err.message}`
   } finally {
     event.currentTarget.value = ''
     attachmentUploading.value = false

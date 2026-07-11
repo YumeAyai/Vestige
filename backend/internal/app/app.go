@@ -11,6 +11,7 @@ import (
 	"html/template"
 	"io"
 	"io/fs"
+	"log"
 	"math/rand"
 	"mime"
 	"mime/multipart"
@@ -768,10 +769,13 @@ type createCampaignInput struct {
 func (s *Server) uploadCampaignAttachment(c *gin.Context) {
 	file, err := c.FormFile("file")
 	if err != nil {
+		log.Printf("campaign attachment rejected: form file missing: content_type=%q content_length=%d err=%v", c.GetHeader("Content-Type"), c.Request.ContentLength, err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "请上传附件"})
 		return
 	}
+	log.Printf("campaign attachment received: filename=%q size=%d content_type=%q request_length=%d", file.Filename, file.Size, file.Header.Get("Content-Type"), c.Request.ContentLength)
 	if file.Size <= 0 {
+		log.Printf("campaign attachment rejected: empty file: filename=%q", file.Filename)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "附件不能为空"})
 		return
 	}
