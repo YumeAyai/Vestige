@@ -2,6 +2,7 @@
 import * as echarts from 'echarts'
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { api } from '../services/api'
+import { formatDateTime } from '../utils/time'
 
 const stats = ref({ summary: {}, trend: [] })
 const campaigns = ref([])
@@ -97,6 +98,14 @@ function filter() {
   load()
 }
 
+function eventLabel(type) {
+  return { open: '打开邮件', click: '点击链接', image: '加载图片' }[type] || type
+}
+
+function eventTone(type) {
+  return { open: 'tone-4', click: 'tone-1', image: 'tone-0' }[type] || 'tone-2'
+}
+
 onMounted(load)
 </script>
 
@@ -161,7 +170,20 @@ onMounted(load)
       </div>
       <div class="panel">
         <h3>最近事件</h3>
-        <p class="muted">最新追踪事件记录</p>
+        <div v-if="stats.recent_events?.length" class="recent-event-list">
+          <div v-for="(event, index) in stats.recent_events" :key="`${event.type}-${event.occurred_at}-${index}`" class="recent-event-row">
+            <span class="data-chip" :class="eventTone(event.type)">{{ eventLabel(event.type) }}</span>
+            <div class="recent-event-main">
+              <strong>{{ event.recipient_name || event.email }}</strong>
+              <small>
+                <RouterLink :to="`/campaigns/${event.campaign_id}`">{{ event.campaign_name }}</RouterLink>
+                <template v-if="event.label"> · {{ event.label }}</template>
+              </small>
+            </div>
+            <time>{{ formatDateTime(event.occurred_at) }}</time>
+          </div>
+        </div>
+        <p v-else class="muted recent-event-empty">当前筛选范围内暂无追踪事件。</p>
       </div>
     </div>
   </section>

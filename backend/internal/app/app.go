@@ -2342,7 +2342,65 @@ func (s *Server) globalStats(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"summary": stats, "trend": trend, "campaigns": campaignStats})
+	eventConditions := func(timeColumn string) (string, []any) {
+		conditions := []string{}
+		args := []any{}
+		if since != "" {
+			conditions = append(conditions, timeColumn+" >= ?")
+			args = append(args, since)
+		}
+		if campaignID != "" {
+			conditions = append(conditions, "c.id = ?")
+			args = append(args, campaignID)
+		}
+		if len(conditions) == 0 {
+			return "", args
+		}
+		return " AND " + strings.Join(conditions, " AND "), args
+	}
+	openWhere, openArgs := eventConditions("oe.opened_at")
+	markWhere, markArgs := eventConditions("tme.triggered_at")
+	eventArgs := append(openArgs, markArgs...)
+	eventRows, _ := s.db.Query(`
+		SELECT event_type,campaign_id,campaign_name,recipient_name,email,label,occurred_at
+		FROM (
+			SELECT
+				'open' event_type,c.id campaign_id,c.name campaign_name,
+				cr.name recipient_name,cr.email,'' label,oe.opened_at occurred_at
+			FROM open_events oe
+			JOIN campaign_recipients cr ON cr.id=oe.campaign_recipient_id
+			JOIN campaigns c ON c.id=cr.campaign_id
+			WHERE 1=1`+openWhere+`
+			UNION ALL
+			SELECT
+				tme.kind event_type,c.id campaign_id,c.name campaign_name,
+				cr.name recipient_name,cr.email,tm.label,tme.triggered_at occurred_at
+			FROM tracking_mark_events tme
+			JOIN tracking_marks tm ON tm.id=tme.mark_id
+			JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id
+			JOIN campaigns c ON c.id=cr.campaign_id
+			WHERE tme.kind IN ('click','image')`+markWhere+`
+		)
+		ORDER BY occurred_at DESC
+		LIMIT 20`, eventArgs...)
+	defer closeRows(eventRows)
+	recentEvents := []gin.H{}
+	if eventRows != nil {
+		for eventRows.Next() {
+			var eventType, campaignName, recipientName, email, label, occurredAt string
+			var eventCampaignID int64
+			if err := eventRows.Scan(&eventType, &eventCampaignID, &campaignName, &recipientName, &email, &label, &occurredAt); err == nil {
+				recentEvents = append(recentEvents, gin.H{
+					"type": eventType, "campaign_id": eventCampaignID, "campaign_name": campaignName,
+					"recipient_name": recipientName, "email": email, "label": label, "occurred_at": occurredAt,
+				})
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"summary": stats, "trend": trend, "campaigns": campaignStats, "recent_events": recentEvents,
+	})
 }
 
 func recipientStatsWhere(alias, since, campaignID string, extra ...string) (string, []any) {

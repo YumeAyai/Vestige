@@ -51,6 +51,11 @@ func TestGlobalStatsIncludesCampaignRows(t *testing.T) {
 			Opened  int    `json:"opened"`
 			Clicked int    `json:"clicked"`
 		} `json:"campaigns"`
+		RecentEvents []struct {
+			Type         string `json:"type"`
+			CampaignName string `json:"campaign_name"`
+			Email        string `json:"email"`
+		} `json:"recent_events"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
@@ -61,5 +66,8 @@ func TestGlobalStatsIncludesCampaignRows(t *testing.T) {
 	got := payload.Campaigns[0]
 	if got.ID != campaignID || got.Name != "任务 A" || got.Sent != 1 || got.Opened != 1 || got.Clicked != 1 {
 		t.Fatalf("unexpected campaign stats: %#v", got)
+	}
+	if len(payload.RecentEvents) != 1 || payload.RecentEvents[0].Type != "click" || payload.RecentEvents[0].CampaignName != "任务 A" || payload.RecentEvents[0].Email != "a@example.com" {
+		t.Fatalf("unexpected recent events: %#v", payload.RecentEvents)
 	}
 }
