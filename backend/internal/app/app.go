@@ -2297,7 +2297,52 @@ func (s *Server) globalStats(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{"summary": stats, "trend": trend})
+	campaignWhere := ""
+	campaignArgs := []any{}
+	joinConditions := []string{}
+	if since != "" {
+		joinConditions = append(joinConditions, "cr.sent_at >= ?")
+		campaignArgs = append(campaignArgs, since)
+	}
+	if len(joinConditions) > 0 {
+		campaignWhere += " AND " + strings.Join(joinConditions, " AND ")
+	}
+	if campaignID != "" {
+		campaignWhere += " WHERE c.id = ?"
+		campaignArgs = append(campaignArgs, campaignID)
+	}
+	campaignRows, _ := s.db.Query(`
+		SELECT
+			c.id,
+			c.name,
+			COALESCE(SUM(cr.send_status='sent'), 0) sent,
+			COALESCE(SUM(cr.open_count>0), 0) opened,
+			COALESCE(SUM(CASE WHEN EXISTS (
+				SELECT 1
+				FROM tracking_mark_events tme
+				JOIN tracking_marks tm ON tm.id=tme.mark_id
+				WHERE tm.campaign_recipient_id=cr.id AND tme.kind='click'
+			) THEN 1 ELSE 0 END), 0) clicked
+		FROM campaigns c
+		LEFT JOIN campaign_recipients cr ON cr.campaign_id=c.id`+campaignWhere+`
+		GROUP BY c.id,c.name
+		ORDER BY c.id DESC`, campaignArgs...)
+	defer closeRows(campaignRows)
+	campaignStats := []gin.H{}
+	if campaignRows != nil {
+		for campaignRows.Next() {
+			var id int64
+			var name string
+			var sent, opened, clicked int
+			if err := campaignRows.Scan(&id, &name, &sent, &opened, &clicked); err == nil {
+				campaignStats = append(campaignStats, gin.H{
+					"id": id, "name": name, "sent": sent, "opened": opened, "clicked": clicked,
+				})
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"summary": stats, "trend": trend, "campaigns": campaignStats})
 }
 
 func recipientStatsWhere(alias, since, campaignID string, extra ...string) (string, []any) {

@@ -150,11 +150,11 @@ onMounted(load)
             <tr><th>任务</th><th>发送</th><th>打开</th><th>点击</th></tr>
           </thead>
           <tbody>
-            <tr v-for="c in campaigns" :key="c.id">
+            <tr v-for="c in stats.campaigns || []" :key="c.id">
               <td><RouterLink :to="`/campaigns/${c.id}`">{{ c.name }}</RouterLink></td>
-              <td>-</td>
-              <td>-</td>
-              <td>-</td>
+              <td>{{ c.sent ?? 0 }}</td>
+              <td>{{ c.opened ?? 0 }}</td>
+              <td>{{ c.clicked ?? 0 }}</td>
             </tr>
           </tbody>
         </table>
