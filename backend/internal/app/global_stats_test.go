@@ -45,11 +45,12 @@ func TestGlobalStatsIncludesCampaignRows(t *testing.T) {
 	}
 	var payload struct {
 		Campaigns []struct {
-			ID      int64  `json:"id"`
-			Name    string `json:"name"`
-			Sent    int    `json:"sent"`
-			Opened  int    `json:"opened"`
-			Clicked int    `json:"clicked"`
+			ID        int64  `json:"id"`
+			Name      string `json:"name"`
+			CreatedAt string `json:"created_at"`
+			Sent      int    `json:"sent"`
+			Opened    int    `json:"opened"`
+			Clicked   int    `json:"clicked"`
 		} `json:"campaigns"`
 		RecentEvents []struct {
 			Type         string `json:"type"`
@@ -64,7 +65,7 @@ func TestGlobalStatsIncludesCampaignRows(t *testing.T) {
 		t.Fatalf("expected one campaign row, got %#v", payload.Campaigns)
 	}
 	got := payload.Campaigns[0]
-	if got.ID != campaignID || got.Name != "任务 A" || got.Sent != 1 || got.Opened != 1 || got.Clicked != 1 {
+	if got.ID != campaignID || got.Name != "任务 A" || got.CreatedAt == "" || got.Sent != 1 || got.Opened != 1 || got.Clicked != 1 {
 		t.Fatalf("unexpected campaign stats: %#v", got)
 	}
 	if len(payload.RecentEvents) != 1 || payload.RecentEvents[0].Type != "click" || payload.RecentEvents[0].CampaignName != "任务 A" || payload.RecentEvents[0].Email != "a@example.com" {

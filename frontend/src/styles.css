@@ -960,6 +960,14 @@ td a {
   margin-top: 10px;
 }
 
+.stats-table-wrap {
+  overflow-x: auto;
+}
+
+.task-stats-table {
+  min-width: 540px;
+}
+
 .recent-event-row {
   align-items: center;
   border-top: 1px solid var(--line);

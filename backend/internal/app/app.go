@@ -2311,10 +2311,11 @@ func (s *Server) globalStats(c *gin.Context) {
 		campaignWhere += " WHERE c.id = ?"
 		campaignArgs = append(campaignArgs, campaignID)
 	}
-	campaignRows, _ := s.db.Query(`
+	campaignRows, err := s.db.Query(`
 		SELECT
 			c.id,
 			c.name,
+			c.created_at,
 			COALESCE(SUM(cr.send_status='sent'), 0) sent,
 			COALESCE(SUM(cr.open_count>0), 0) opened,
 			COALESCE(SUM(CASE WHEN EXISTS (
@@ -2325,18 +2326,23 @@ func (s *Server) globalStats(c *gin.Context) {
 			) THEN 1 ELSE 0 END), 0) clicked
 		FROM campaigns c
 		LEFT JOIN campaign_recipients cr ON cr.campaign_id=c.id`+campaignWhere+`
-		GROUP BY c.id,c.name
+		GROUP BY c.id,c.name,c.created_at
 		ORDER BY c.id DESC`, campaignArgs...)
+	if err != nil {
+		fail(c, err)
+		return
+	}
 	defer closeRows(campaignRows)
 	campaignStats := []gin.H{}
 	if campaignRows != nil {
 		for campaignRows.Next() {
 			var id int64
-			var name string
+			var name, createdAt string
 			var sent, opened, clicked int
-			if err := campaignRows.Scan(&id, &name, &sent, &opened, &clicked); err == nil {
+			if err := campaignRows.Scan(&id, &name, &createdAt, &sent, &opened, &clicked); err == nil {
 				campaignStats = append(campaignStats, gin.H{
-					"id": id, "name": name, "sent": sent, "opened": opened, "clicked": clicked,
+					"id": id, "name": name, "created_at": createdAt,
+					"sent": sent, "opened": opened, "clicked": clicked,
 				})
 			}
 		}
@@ -2361,7 +2367,7 @@ func (s *Server) globalStats(c *gin.Context) {
 	openWhere, openArgs := eventConditions("oe.opened_at")
 	markWhere, markArgs := eventConditions("tme.triggered_at")
 	eventArgs := append(openArgs, markArgs...)
-	eventRows, _ := s.db.Query(`
+	eventRows, err := s.db.Query(`
 		SELECT event_type,campaign_id,campaign_name,recipient_name,email,label,occurred_at
 		FROM (
 			SELECT
@@ -2383,6 +2389,10 @@ func (s *Server) globalStats(c *gin.Context) {
 		)
 		ORDER BY occurred_at DESC
 		LIMIT 20`, eventArgs...)
+	if err != nil {
+		fail(c, err)
+		return
+	}
 	defer closeRows(eventRows)
 	recentEvents := []gin.H{}
 	if eventRows != nil {

@@ -7,14 +7,8 @@ import { formatDateTime } from '../utils/time'
 const stats = ref({ summary: {}, trend: [] })
 const campaigns = ref([])
 const selectedCampaign = ref('')
-const since = ref(todayDate())
+const since = ref('')
 const chartEl = ref(null)
-
-function todayDate() {
-  const now = new Date()
-  const offset = now.getTimezoneOffset() * 60000
-  return new Date(now.getTime() - offset).toISOString().slice(0, 10)
-}
 
 const openRate = computed(() => {
   const s = stats.value.summary
@@ -154,19 +148,22 @@ onMounted(load)
     <div class="grid two" style="margin-top: 16px">
       <div class="panel">
         <h3>任务统计</h3>
-        <table>
-          <thead>
-            <tr><th>任务</th><th>发送</th><th>打开</th><th>点击</th></tr>
-          </thead>
-          <tbody>
-            <tr v-for="c in stats.campaigns || []" :key="c.id">
-              <td><RouterLink :to="`/campaigns/${c.id}`">{{ c.name }}</RouterLink></td>
-              <td>{{ c.sent ?? 0 }}</td>
-              <td>{{ c.opened ?? 0 }}</td>
-              <td>{{ c.clicked ?? 0 }}</td>
-            </tr>
-          </tbody>
-        </table>
+        <div class="stats-table-wrap">
+          <table class="task-stats-table">
+            <thead>
+              <tr><th>任务</th><th>创建时间</th><th>发送</th><th>打开</th><th>点击</th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="c in stats.campaigns || []" :key="c.id">
+                <td><RouterLink :to="`/campaigns/${c.id}`">{{ c.name }}</RouterLink></td>
+                <td>{{ formatDateTime(c.created_at) }}</td>
+                <td>{{ c.sent ?? 0 }}</td>
+                <td>{{ c.opened ?? 0 }}</td>
+                <td>{{ c.clicked ?? 0 }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       </div>
       <div class="panel">
         <h3>最近事件</h3>
