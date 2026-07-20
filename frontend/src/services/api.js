@@ -83,9 +83,10 @@ export const api = {
   links: (id) => request(`/api/campaigns/${id}/links`),
   linkStats: (campaignId, linkId) => request(`/api/campaigns/${campaignId}/links/${linkId}/stats`),
   // Global stats
-  globalStats: ({ since = '', campaign = '' } = {}) => {
+  globalStats: ({ since = '', until = '', campaign = '' } = {}) => {
     const params = new URLSearchParams()
     if (since) params.set('since', since)
+    if (until) params.set('until', until)
     if (campaign) params.set('campaign', campaign)
     const query = params.toString() ? `?${params.toString()}` : ''
     return request(`/api/stats${query}`)

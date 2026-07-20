@@ -2248,7 +2248,12 @@ func forwardAssetReader(baseURL string, src io.Reader, filename, label string, w
 func (s *Server) globalStats(c *gin.Context) {
 	s.syncCloudTrackingEventsBestEffort(c)
 	since := c.Query("since")
+	until := c.Query("until")
 	campaignID := c.Query("campaign")
+	if since != "" && until != "" && since > until {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "开始日期不能晚于结束日期"})
+		return
+	}
 
 	var stats struct {
 		TotalCampaigns int `json:"total_campaigns"`
@@ -2258,34 +2263,42 @@ func (s *Server) globalStats(c *gin.Context) {
 		TotalQRLoaded  int `json:"total_qr_loaded"`
 	}
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM campaigns`).Scan(&stats.TotalCampaigns)
-	where, args := recipientStatsWhere("cr", since, campaignID, "cr.send_status='sent'")
+	where, args := recipientStatsWhere("cr", since, until, campaignID, "cr.send_status='sent'")
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM campaign_recipients cr `+where, args...).Scan(&stats.TotalSent)
-	where, args = recipientStatsWhere("cr", since, campaignID, "cr.open_count>0")
+	where, args = recipientStatsWhere("cr", since, until, campaignID, "cr.open_count>0")
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM campaign_recipients cr `+where, args...).Scan(&stats.TotalOpened)
-	where, args = recipientStatsWhere("cr", since, campaignID, "tme.kind='click'")
+	where, args = recipientStatsWhere("cr", since, until, campaignID, "tme.kind='click'")
 	_ = s.db.QueryRow(`
 		SELECT COUNT(DISTINCT tme.mark_id)
 		FROM tracking_mark_events tme
 		JOIN tracking_marks tm ON tm.id=tme.mark_id
 		JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id `+where, args...).Scan(&stats.TotalClicked)
-	where, args = recipientStatsWhere("cr", since, campaignID, "tme.kind='image'", "tme.is_prefetch=0")
+	where, args = recipientStatsWhere("cr", since, until, campaignID, "tme.kind='image'", "tme.is_prefetch=0")
 	_ = s.db.QueryRow(`
 		SELECT COUNT(DISTINCT tm.id)
 		FROM tracking_mark_events tme
 		JOIN tracking_marks tm ON tm.id=tme.mark_id
 		JOIN campaign_recipients cr ON cr.id=tm.campaign_recipient_id `+where, args...).Scan(&stats.TotalQRLoaded)
 
-	// Get daily trend for last 30 days
-	rows, _ := s.db.Query(`
+	trendWhere, trendArgs := recipientStatsWhere("cr", since, until, campaignID, "cr.send_status='sent'")
+	rows, err := s.db.Query(`
 		SELECT DATE(cr.sent_at) date,
 			COUNT(*) sent,
 			COALESCE(SUM(cr.open_count>0), 0) opened,
-			COALESCE((SELECT COUNT(*) FROM tracking_mark_events tme JOIN tracking_marks tm ON tm.id=tme.mark_id JOIN campaign_recipients cr2 ON cr2.id=tm.campaign_recipient_id WHERE DATE(cr2.sent_at)=DATE(cr.sent_at) AND tme.kind='click'), 0) clicked
+			COALESCE(SUM(CASE WHEN EXISTS (
+				SELECT 1 FROM tracking_mark_events tme
+				JOIN tracking_marks tm ON tm.id=tme.mark_id
+				WHERE tm.campaign_recipient_id=cr.id AND tme.kind='click'
+			) THEN 1 ELSE 0 END), 0) clicked
 		FROM campaign_recipients cr
-		WHERE cr.send_status='sent' AND cr.sent_at >= DATE('now', '-30 days')
+		`+trendWhere+`
 		GROUP BY DATE(cr.sent_at)
 		ORDER BY date
-	`)
+	`, trendArgs...)
+	if err != nil {
+		fail(c, err)
+		return
+	}
 	defer closeRows(rows)
 	trend := []gin.H{}
 	if rows != nil {
@@ -2303,6 +2316,10 @@ func (s *Server) globalStats(c *gin.Context) {
 	if since != "" {
 		joinConditions = append(joinConditions, "cr.sent_at >= ?")
 		campaignArgs = append(campaignArgs, since)
+	}
+	if until != "" {
+		joinConditions = append(joinConditions, "cr.sent_at < DATETIME(?, '+1 day')")
+		campaignArgs = append(campaignArgs, until)
 	}
 	if len(joinConditions) > 0 {
 		campaignWhere += " AND " + strings.Join(joinConditions, " AND ")
@@ -2354,6 +2371,10 @@ func (s *Server) globalStats(c *gin.Context) {
 		if since != "" {
 			conditions = append(conditions, timeColumn+" >= ?")
 			args = append(args, since)
+		}
+		if until != "" {
+			conditions = append(conditions, timeColumn+" < DATETIME(?, '+1 day')")
+			args = append(args, until)
 		}
 		if campaignID != "" {
 			conditions = append(conditions, "c.id = ?")
@@ -2413,12 +2434,16 @@ func (s *Server) globalStats(c *gin.Context) {
 	})
 }
 
-func recipientStatsWhere(alias, since, campaignID string, extra ...string) (string, []any) {
+func recipientStatsWhere(alias, since, until, campaignID string, extra ...string) (string, []any) {
 	conditions := []string{}
 	args := []any{}
 	if since != "" {
 		conditions = append(conditions, alias+".sent_at >= ?")
 		args = append(args, since)
+	}
+	if until != "" {
+		conditions = append(conditions, alias+".sent_at < DATETIME(?, '+1 day')")
+		args = append(args, until)
 	}
 	if campaignID != "" {
 		conditions = append(conditions, alias+".campaign_id = ?")

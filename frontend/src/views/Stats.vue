@@ -8,6 +8,7 @@ const stats = ref({ summary: {}, trend: [] })
 const campaigns = ref([])
 const selectedCampaign = ref('')
 const since = ref('')
+const until = ref('')
 const chartEl = ref(null)
 
 const openRate = computed(() => {
@@ -29,7 +30,11 @@ const qrRate = computed(() => {
 })
 
 async function load() {
-  stats.value = await api.globalStats({ since: since.value, campaign: selectedCampaign.value })
+  stats.value = await api.globalStats({
+    since: since.value,
+    until: until.value,
+    campaign: selectedCampaign.value,
+  })
   campaigns.value = await api.campaigns()
   await nextTick()
   renderChart()
@@ -89,6 +94,11 @@ function renderChart() {
 }
 
 function filter() {
+  if (since.value && until.value && since.value > until.value) {
+    const start = until.value
+    until.value = since.value
+    since.value = start
+  }
   load()
 }
 
@@ -117,7 +127,16 @@ onMounted(load)
         <option value="">全部任务</option>
         <option v-for="c in campaigns" :key="c.id" :value="c.id">{{ c.name }}</option>
       </select>
-      <input v-model="since" type="date" @change="filter" />
+      <div class="date-range-filter">
+        <label>
+          <span>开始</span>
+          <input v-model="since" type="date" :max="until || undefined" @change="filter" />
+        </label>
+        <label>
+          <span>结束</span>
+          <input v-model="until" type="date" :min="since || undefined" @change="filter" />
+        </label>
+      </div>
     </div>
 
     <div class="grid four">
@@ -141,7 +160,7 @@ onMounted(load)
 
     <div class="panel" style="margin-top: 16px">
       <h2>趋势图</h2>
-      <p class="muted">最近 30 天发送、打开和点击趋势</p>
+      <p class="muted">所选时间范围内的发送、打开和点击趋势</p>
       <div ref="chartEl" class="chart"></div>
     </div>
 

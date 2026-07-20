@@ -26,18 +26,18 @@ func TestGlobalStatsIncludesCampaignRows(t *testing.T) {
 	campaignID, _ := campaign.LastInsertId()
 	contact, _ := conn.Exec(`INSERT INTO contacts(name,email) VALUES('A','a@example.com')`)
 	contactID, _ := contact.LastInsertId()
-	recipient, err := conn.Exec(`INSERT INTO campaign_recipients(campaign_id,contact_id,email,name,tracking_id,send_status,sent_at,open_count) VALUES(?,?,?,?,?,'sent',CURRENT_TIMESTAMP,1)`, campaignID, contactID, "a@example.com", "A", "track-a")
+	recipient, err := conn.Exec(`INSERT INTO campaign_recipients(campaign_id,contact_id,email,name,tracking_id,send_status,sent_at,open_count) VALUES(?,?,?,?,?,'sent','2026-07-20 23:59:59',1)`, campaignID, contactID, "a@example.com", "A", "track-a")
 	if err != nil {
 		t.Fatal(err)
 	}
 	recipientID, _ := recipient.LastInsertId()
 	mark, _ := conn.Exec(`INSERT INTO tracking_marks(campaign_recipient_id,token,kind,label,target_url) VALUES(?,?,'click','link','https://example.com')`, recipientID, "click-a")
 	markID, _ := mark.LastInsertId()
-	if _, err := conn.Exec(`INSERT INTO tracking_mark_events(mark_id,token,kind,event_index) VALUES(?,?,'click','1')`, markID, "click-a"); err != nil {
+	if _, err := conn.Exec(`INSERT INTO tracking_mark_events(mark_id,token,kind,event_index,triggered_at) VALUES(?,?,'click','1','2026-07-20 23:59:59')`, markID, "click-a"); err != nil {
 		t.Fatal(err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/stats", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/stats?since=2026-07-20&until=2026-07-20", nil)
 	rec := httptest.NewRecorder()
 	New(conn, os.DirFS(t.TempDir())).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {

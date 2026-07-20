@@ -960,6 +960,24 @@ td a {
   margin-top: 10px;
 }
 
+.date-range-filter {
+  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.date-range-filter label {
+  color: var(--muted);
+  display: grid;
+  font-size: 12px;
+  gap: 4px;
+}
+
+.date-range-filter input {
+  min-width: 150px;
+}
+
 .stats-table-wrap {
   overflow-x: auto;
 }
